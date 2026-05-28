@@ -1,0 +1,103 @@
+# ─────────────────────────────────────────────
+#  .cursorrules — HR App Backend
+#  Java 17 + Spring Boot 3 + MySQL
+# ─────────────────────────────────────────────
+
+## Project overview
+This is a multi-tenant HR management SaaS application.
+Backend: Java 17, Spring Boot 3.5.15, Spring Security, Spring Data JPA, MySQL 8.
+Auth: JWT token-based authentication.
+Architecture: REST API consumed by a React Native mobile app.
+
+## Roles
+- SUPERADMIN: platform owner (us), no company_id
+- ADMIN: company CEO/owner, full access within their company
+- HR: HR manager, day-to-day HR ops within their company
+- EMPLOYEE: regular staff, own data only
+
+## Architecture rules — follow strictly
+
+### Package structure
+com.hrapp/
+  config/         → SecurityConfig, JwtConfig, SwaggerConfig
+  controller/     → REST controllers only, no business logic
+  service/        → all business logic lives here
+  repository/     → JPA repositories, custom queries here
+  entity/         → JPA entity classes, one per DB table
+  dto/
+    request/      → incoming request body classes
+    response/     → outgoing response body classes
+  security/       → JwtUtil, JwtFilter, CustomUserDetailsService
+  exception/      → GlobalExceptionHandler, custom exceptions
+  enums/          → SalaryType, AttendanceStatus, AttendanceSource, PunchType, LeaveRequestStatus, AdvanceStatus, PaymentStatus
+
+### Entity rules
+- Always annotate with @Entity, @Table(name = "table_name")
+- Always use @Id, @GeneratedValue(strategy = GenerationType.IDENTITY)
+- Use @Column(name = "column_name", nullable = false) explicitly
+- Use Lombok: @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+- Never use @Data on entities (causes issues with JPA proxies)
+- Relationships: use @ManyToOne @JoinColumn for FK columns
+- All timestamps: use LocalDateTime, annotate with @CreationTimestamp or @UpdateTimestamp
+- Never expose entity directly in controller — always map to DTO
+
+### DTO rules
+- Request DTOs: suffix with Request (e.g. LoginRequest, CreateUserRequest)
+- Response DTOs: suffix with Response (e.g. LoginResponse, UserResponse)
+- Use @Valid on controller method params
+- Use bean validation annotations: @NotBlank @NotNull @Size @Email @Pattern
+- Use Lombok: @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+
+### Controller rules
+- Annotate with @RestController @RequestMapping("/endpoint")
+- Inject service via constructor injection (not @Autowired field injection)
+- Always return ResponseEntity<ApiResponse<?>>
+- Keep controllers thin — only call service methods
+- Use @Valid on @RequestBody params
+- Group endpoints by module: AuthController, UserController, AttendanceController, LeaveController, PayrollController
+
+### Service rules
+- Annotate with @Service
+- Inject repositories via constructor injection
+- All business logic lives here
+- Throw custom exceptions (ResourceNotFoundException, UnauthorizedException, etc.)
+- Use @Transactional on methods that write to DB
+
+### Repository rules
+- Extend JpaRepository<Entity, Long>
+- Custom queries: use @Query with JPQL (not native SQL) unless complex
+- Name methods clearly: findByMobileAndStatus, findByCompanyIdAndMonth etc.
+
+### Security rules
+- Every API must check company_id matches logged-in user's company_id
+- SUPERADMIN can access any company
+- EMPLOYEE can only access their own data
+- Extract logged-in user from SecurityContext using helper method
+- Never trust company_id from request body — always use the logged-in user's company_id
+
+### Standard API response wrapper
+Every API returns this structure:
+{
+  "success": true/false,
+  "message": "human readable message",
+  "data": { ... } or null,
+  "errors": null or { ... }
+}
+Use ApiResponse<T> generic wrapper class for this.
+
+### Exception handling
+- GlobalExceptionHandler with @RestControllerAdvice
+- Custom exceptions: ResourceNotFoundException (404), UnauthorizedException (403), BadRequestException (400), ConflictException (409)
+- Always return ApiResponse with success: false on errors
+
+### Multi-tenancy rule
+Every service method that fetches company data must filter by company_id.
+Never return data from another company. SUPERADMIN bypasses this filter.
+
+## Code style
+- Use constructor injection always, never @Autowired on fields
+- No System.out.println — use @Slf4j (Lombok) and log.info / log.error
+- Keep methods small and focused — one method, one job
+- Write comments only on complex business logic, not obvious code
+- Use Optional properly — don't call .get() without checking isPresent()
+- Meaningful variable names — no single letters except loop counters
