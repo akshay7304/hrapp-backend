@@ -162,8 +162,11 @@ public class LeaveService {
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         LocalDate today = LocalDate.now();
-        if (request.getFromDate().isBefore(today)) {
-            throw new BadRequestException("Leave cannot start before today");
+        // Past leaves are allowed up to 30 days back (e.g. HR back-filling a
+        // sudden sick day); anything older is almost certainly a typo or
+        // attempt to retroactively rewrite history.
+        if (request.getFromDate().isBefore(today.minusDays(30))) {
+            throw new BadRequestException("Cannot apply leave for dates older than 30 days");
         }
         if (request.getToDate().isBefore(request.getFromDate())) {
             throw new BadRequestException("To date cannot be before from date");
