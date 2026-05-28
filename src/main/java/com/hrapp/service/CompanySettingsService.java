@@ -50,6 +50,8 @@ public class CompanySettingsService {
         settings.setOvertimeAfterHours(request.getOvertimeAfterHours());
         settings.setLateMarkAfterMinutes(request.getLateMarkAfterMinutes());
         settings.setWeekOffDay(request.getWeekOffDay());
+        settings.setDeviceBrand(request.getDeviceBrand());
+        settings.setDeviceSecret(request.getDeviceSecret());
 
         settings = companySettingsRepository.save(settings);
         log.info("Updated company settings for company={}", effectiveCompanyId);
@@ -81,6 +83,8 @@ public class CompanySettingsService {
                 .overtimeAfterHours(settings.getOvertimeAfterHours())
                 .lateMarkAfterMinutes(settings.getLateMarkAfterMinutes())
                 .weekOffDay(settings.getWeekOffDay())
+                .deviceBrand(settings.getDeviceBrand())
+                .deviceSecret(settings.getDeviceSecret())
                 .updatedAt(settings.getUpdatedAt())
                 .build();
     }

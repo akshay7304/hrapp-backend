@@ -105,7 +105,12 @@ public class SecurityConfig {
                                 "/auth/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
-                                "/v3/api-docs/**"
+                                "/v3/api-docs/**",
+                                // Biometric devices push punches with a shared secret in
+                                // the body — no JWT is possible from a fingerprint reader.
+                                "/thumb/zkteco",
+                                "/thumb/essl",
+                                "/thumb/generic"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

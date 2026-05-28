@@ -26,5 +26,7 @@ public class CompanySettingsResponse {
     private BigDecimal overtimeAfterHours;
     private Integer lateMarkAfterMinutes;
     private String weekOffDay;
+    private String deviceBrand;
+    private String deviceSecret;
     private LocalDateTime updatedAt;
 }

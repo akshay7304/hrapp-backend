@@ -76,6 +76,23 @@ public interface UserRepository extends JpaRepository<User, Long> {
     long countByCompanyId(Long companyId);
 
     /**
+     * Resolves a biometric-device-side employee id to a real user inside the
+     * given company. Used by the thumb-scanner integration to translate a raw
+     * punch into an {@link User} reference.
+     */
+    Optional<User> findByThumbDeviceIdAndCompanyId(String thumbDeviceId, Long companyId);
+
+    /**
+     * Global lookup by biometric enrol id (no company filter). Used at the
+     * device-push entry point where the caller doesn't yet know which tenant
+     * the device belongs to — the matched user's {@code companyId} is what
+     * tells us. Assumes biometric enrol ids do not collide across companies
+     * sharing the same device fleet; the typical deployment satisfies this
+     * because each company has its own physical device.
+     */
+    Optional<User> findByThumbDeviceId(String thumbDeviceId);
+
+    /**
      * Returns users in a given company that hold the supplied role name.
      * Used by the company-detail endpoint to surface the admin contact;
      * typically returns at most one row but tolerant of multiple admins.

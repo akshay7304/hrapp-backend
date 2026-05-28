@@ -76,6 +76,23 @@ public class CompanySettings {
     @Builder.Default
     private String leaveCountType = "EXCLUDE_WEEK_OFF_AND_HOLIDAYS";
 
+    /**
+     * Manufacturer / protocol identifier of the biometric device pushing logs
+     * for this company (e.g. {@code ZKTECO}, {@code ESSL}, {@code GENERIC}).
+     * Used by ops as a routing hint; the actual endpoint chosen by the device
+     * is what determines parsing.
+     */
+    @Column(name = "device_brand", length = 50)
+    private String deviceBrand;
+
+    /**
+     * Shared secret the device must include in every push so the server can
+     * verify the call came from the registered device. Stored as plain text
+     * because the device fleet doesn't support TLS client auth.
+     */
+    @Column(name = "device_secret", length = 100)
+    private String deviceSecret;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

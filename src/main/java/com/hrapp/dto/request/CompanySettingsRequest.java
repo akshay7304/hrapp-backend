@@ -44,4 +44,10 @@ public class CompanySettingsRequest {
 
     @NotBlank(message = "Week off day is required")
     private String weekOffDay;
+
+    /** Optional — manufacturer/protocol hint for the biometric device. */
+    private String deviceBrand;
+
+    /** Optional — shared secret the device must send on every push. */
+    private String deviceSecret;
 }
