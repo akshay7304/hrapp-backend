@@ -5,6 +5,7 @@ import com.hrapp.dto.response.AdvanceResponse;
 import com.hrapp.dto.response.AttendanceReportResponse;
 import com.hrapp.dto.response.LeaveReportResponse;
 import com.hrapp.dto.response.LeaveRequestResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.SalaryReportResponse;
 import com.hrapp.entity.Advance;
 import com.hrapp.entity.Attendance;
@@ -32,6 +33,8 @@ import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -89,7 +92,8 @@ public class ReportService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<AttendanceReportResponse> getMonthlyAttendanceReport(Integer month, Integer year) {
+    public PageResponse<AttendanceReportResponse> getMonthlyAttendanceReport(
+            Integer month, Integer year, Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
                 .orElseThrow(() -> new BadRequestException("Company settings not configured"));
@@ -102,11 +106,12 @@ public class ReportService {
         List<User> employees = userRepository
                 .findByCompanyIdAndStatus_NameNotIn(companyId, ATTENDANCE_EXCLUDED_STATUSES);
 
-        return employees.stream()
+        List<AttendanceReportResponse> all = employees.stream()
                 .map(employee -> buildAttendanceReport(
                         employee, month, year, monthStart, monthEnd, totalWorkingDays))
                 .sorted(byEmpCode(AttendanceReportResponse::getEmpCode))
                 .toList();
+        return sliceInMemory(all, pageable);
     }
 
     private AttendanceReportResponse buildAttendanceReport(User employee, Integer month, Integer year,
@@ -184,16 +189,18 @@ public class ReportService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<SalaryReportResponse> getMonthlySalaryReport(Integer month, Integer year) {
+    public PageResponse<SalaryReportResponse> getMonthlySalaryReport(
+            Integer month, Integer year, Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         List<SalaryPayment> payments = salaryPaymentRepository
                 .findByUser_CompanyIdAndMonthAndYear(companyId, month, year);
         Map<Long, AdjustmentTotals> adjustmentsByUser = computeAdjustmentTotals(companyId, month, year);
 
-        return payments.stream()
+        List<SalaryReportResponse> all = payments.stream()
                 .map(payment -> buildSalaryReport(payment, adjustmentsByUser))
                 .sorted(byEmpCode(SalaryReportResponse::getEmpCode))
                 .toList();
+        return sliceInMemory(all, pageable);
     }
 
     private SalaryReportResponse buildSalaryReport(SalaryPayment payment,
@@ -254,7 +261,8 @@ public class ReportService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<LeaveReportResponse> getLeaveReport(Integer month, Integer year) {
+    public PageResponse<LeaveReportResponse> getLeaveReport(
+            Integer month, Integer year, Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         YearMonth ym = YearMonth.of(year, month);
         LocalDate monthStart = ym.atDay(1);
@@ -265,12 +273,13 @@ public class ReportService {
                 .findByUser_CompanyIdAndFromDateBetween(companyId, monthStart, monthEnd).stream()
                 .collect(Collectors.groupingBy(lr -> lr.getUser().getId()));
 
-        return employees.stream()
+        List<LeaveReportResponse> all = employees.stream()
                 .map(employee -> buildLeaveReport(
                         employee, month, year,
                         leavesByUser.getOrDefault(employee.getId(), List.of())))
                 .sorted(byEmpCode(LeaveReportResponse::getEmpCode))
                 .toList();
+        return sliceInMemory(all, pageable);
     }
 
     private LeaveReportResponse buildLeaveReport(User employee, Integer month, Integer year,
@@ -314,19 +323,19 @@ public class ReportService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<AdvanceReportResponse> getAdvanceReport() {
+    public PageResponse<AdvanceReportResponse> getAdvanceReport(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         Map<Long, List<Advance>> advancesByUser = advanceRepository
                 .findByUser_CompanyIdOrderByCreatedAtDesc(companyId).stream()
                 .collect(Collectors.groupingBy(a -> a.getUser().getId()));
         if (advancesByUser.isEmpty()) {
-            return List.of();
+            return sliceInMemory(List.of(), pageable);
         }
 
         Map<Long, User> usersById = userRepository.findByCompanyId(companyId).stream()
                 .collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
 
-        return advancesByUser.entrySet().stream()
+        List<AdvanceReportResponse> all = advancesByUser.entrySet().stream()
                 .map(entry -> {
                     User employee = usersById.get(entry.getKey());
                     if (employee == null) {
@@ -341,6 +350,7 @@ public class ReportService {
                 .filter(Objects::nonNull)
                 .sorted(byEmpCode(AdvanceReportResponse::getEmpCode))
                 .toList();
+        return sliceInMemory(all, pageable);
     }
 
     private AdvanceReportResponse buildAdvanceReport(User employee, List<Advance> advances) {
@@ -457,6 +467,21 @@ public class ReportService {
 
     private static BigDecimal scale2(BigDecimal value) {
         return value.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Pagination for fully-materialised report rows. Reports aggregate across
+     * employees so the full list must be built before slicing; given typical
+     * HR team sizes this stays cheap. If a tenant ever grows large enough to
+     * notice, the underlying query layer is where pagination should move.
+     */
+    private static <T> PageResponse<T> sliceInMemory(List<T> all, Pageable pageable) {
+        int total = all.size();
+        int pageSize = Math.max(pageable.getPageSize(), 1);
+        int from = (int) Math.min(pageable.getOffset(), total);
+        int to = Math.min(from + pageSize, total);
+        List<T> content = from >= to ? List.of() : all.subList(from, to);
+        return PageResponse.from(new PageImpl<>(content, pageable, total));
     }
 
     // ============================================================

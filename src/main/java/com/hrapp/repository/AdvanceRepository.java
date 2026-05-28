@@ -2,6 +2,9 @@ package com.hrapp.repository;
 
 import com.hrapp.entity.Advance;
 import com.hrapp.enums.AdvanceStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -54,6 +57,11 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
             @Param("companyId") Long companyId,
             @Param("status") AdvanceStatus status);
 
+    /** Paginated variant for the admin pending queue. */
+    @EntityGraph(attributePaths = {"user", "approvedBy"})
+    Page<Advance> findByUser_CompanyIdAndStatus(
+            Long companyId, AdvanceStatus status, Pageable pageable);
+
     /** Full company history — newest first. */
     @Query("SELECT a FROM Advance a " +
             "JOIN FETCH a.user u " +
@@ -61,4 +69,8 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
             "WHERE u.company.id = :companyId " +
             "ORDER BY a.createdAt DESC")
     List<Advance> findByUser_CompanyIdOrderByCreatedAtDesc(@Param("companyId") Long companyId);
+
+    /** Paginated company history. Default order is encoded in the method name. */
+    @EntityGraph(attributePaths = {"user", "approvedBy"})
+    Page<Advance> findByUser_CompanyIdOrderByCreatedAtDesc(Long companyId, Pageable pageable);
 }

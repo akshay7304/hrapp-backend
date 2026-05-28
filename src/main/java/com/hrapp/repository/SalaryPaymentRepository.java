@@ -1,6 +1,9 @@
 package com.hrapp.repository;
 
 import com.hrapp.entity.SalaryPayment;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -39,6 +42,18 @@ public interface SalaryPaymentRepository extends JpaRepository<SalaryPayment, Lo
             @Param("companyId") Long companyId,
             @Param("month") Integer month,
             @Param("year") Integer year);
+
+    /**
+     * Paginated company-scoped payroll lookup. {@link EntityGraph} eagerly
+     * loads {@code user} (with its {@code department}/{@code designation}),
+     * {@code salaryStructure} and the optional {@code generatedBy} — same
+     * shape as the non-paginated query above, but safe with {@code Pageable}.
+     */
+    @EntityGraph(attributePaths = {
+            "user", "user.department", "user.designation",
+            "salaryStructure", "generatedBy"})
+    Page<SalaryPayment> findByUser_CompanyIdAndMonthAndYear(
+            Long companyId, Integer month, Integer year, Pageable pageable);
 
     boolean existsByUserIdAndMonthAndYear(Long userId, Integer month, Integer year);
 }

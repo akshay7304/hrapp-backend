@@ -2,6 +2,9 @@ package com.hrapp.repository;
 
 import com.hrapp.entity.LeaveRequest;
 import com.hrapp.enums.LeaveRequestStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -32,6 +35,16 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
             @Param("from") LocalDate from,
             @Param("to") LocalDate to);
 
+    /**
+     * Paginated variant of the per-user date-range lookup. Uses
+     * {@link EntityGraph} so {@code user}, {@code leaveType} and the optional
+     * {@code actionedBy} all load eagerly without the {@code JOIN FETCH +
+     * Pageable} in-memory-pagination pitfall.
+     */
+    @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
+    Page<LeaveRequest> findByUserIdAndFromDateBetween(
+            Long userId, LocalDate fromDate, LocalDate toDate, Pageable pageable);
+
     @Query("SELECT lr FROM LeaveRequest lr " +
             "JOIN FETCH lr.user u " +
             "JOIN FETCH lr.leaveType " +
@@ -40,6 +53,11 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
     List<LeaveRequest> findByUser_CompanyIdAndStatus(
             @Param("companyId") Long companyId,
             @Param("status") LeaveRequestStatus status);
+
+    /** Paginated company-scoped lookup by status. Used by the pending-leaves admin view. */
+    @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
+    Page<LeaveRequest> findByUser_CompanyIdAndStatus(
+            Long companyId, LeaveRequestStatus status, Pageable pageable);
 
     @Query("SELECT lr FROM LeaveRequest lr " +
             "JOIN FETCH lr.user u " +
@@ -50,6 +68,11 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
             @Param("companyId") Long companyId,
             @Param("from") LocalDate from,
             @Param("to") LocalDate to);
+
+    /** Paginated company-scoped lookup by date range. Used by the all-leaves admin view. */
+    @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
+    Page<LeaveRequest> findByUser_CompanyIdAndFromDateBetween(
+            Long companyId, LocalDate fromDate, LocalDate toDate, Pageable pageable);
 
     /**
      * Returns true when the user already has a leave request whose date range

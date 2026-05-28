@@ -4,6 +4,7 @@ import com.hrapp.dto.request.MarkPaidRequest;
 import com.hrapp.dto.request.RunPayrollRequest;
 import com.hrapp.dto.request.SalaryAdjustmentRequest;
 import com.hrapp.dto.request.SalaryStructureRequest;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.SalaryAdjustmentResponse;
 import com.hrapp.dto.response.SalaryPaymentResponse;
 import com.hrapp.dto.response.SalaryStructureResponse;
@@ -38,6 +39,10 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -292,16 +297,52 @@ public class PayrollService {
         Long companyId = requireCallerCompanyId();
         List<SalaryPayment> payments = salaryPaymentRepository
                 .findByUser_CompanyIdAndMonthAndYear(companyId, month, year);
-        Map<Long, List<SalaryAdjustmentResponse>> adjustmentsByUser = salaryAdjustmentRepository
-                .findByCompanyIdAndMonthAndYear(companyId, month, year).stream()
-                .collect(Collectors.groupingBy(
-                        a -> a.getUser().getId(),
-                        Collectors.mapping(this::toAdjustmentResponse, Collectors.toList())));
+        Map<Long, List<SalaryAdjustmentResponse>> adjustmentsByUser =
+                loadAdjustmentsByUser(companyId, month, year);
 
         return payments.stream()
                 .map(p -> toPaymentResponse(p,
                         adjustmentsByUser.getOrDefault(p.getUser().getId(), List.of())))
                 .toList();
+    }
+
+    /**
+     * Paginated payroll listing. Backs {@code GET /payroll/{month}/{year}}.
+     * The adjustments map is built company-wide for the month, then looked up
+     * per user on the current page — keeps the response shape identical to
+     * the legacy list endpoint while still serving one page at a time.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<SalaryPaymentResponse> getPayroll(
+            Integer month, Integer year, Pageable pageable) {
+        Long companyId = requireCallerCompanyId();
+        Pageable effective = applyDefaultSort(pageable, Sort.by("user.fullName"));
+        Page<SalaryPayment> payments = salaryPaymentRepository
+                .findByUser_CompanyIdAndMonthAndYear(companyId, month, year, effective);
+        if (payments.isEmpty()) {
+            return PageResponse.from(payments.map(p -> toPaymentResponse(p, List.of())));
+        }
+        Map<Long, List<SalaryAdjustmentResponse>> adjustmentsByUser =
+                loadAdjustmentsByUser(companyId, month, year);
+        return PageResponse.from(payments.map(p ->
+                toPaymentResponse(p,
+                        adjustmentsByUser.getOrDefault(p.getUser().getId(), List.of()))));
+    }
+
+    private Map<Long, List<SalaryAdjustmentResponse>> loadAdjustmentsByUser(
+            Long companyId, Integer month, Integer year) {
+        return salaryAdjustmentRepository
+                .findByCompanyIdAndMonthAndYear(companyId, month, year).stream()
+                .collect(Collectors.groupingBy(
+                        a -> a.getUser().getId(),
+                        Collectors.mapping(this::toAdjustmentResponse, Collectors.toList())));
+    }
+
+    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
     }
 
     @Transactional(readOnly = true)

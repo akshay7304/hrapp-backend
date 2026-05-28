@@ -4,10 +4,13 @@ import com.hrapp.ApiResponse;
 import com.hrapp.dto.request.ActionAdvanceRequest;
 import com.hrapp.dto.request.AdvanceRequest;
 import com.hrapp.dto.response.AdvanceResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.service.AdvanceService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -55,15 +59,21 @@ public class AdvanceController {
 
     @GetMapping("/pending")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<AdvanceResponse>>> getPendingAdvances() {
-        List<AdvanceResponse> data = advanceService.getPendingAdvances();
+    public ResponseEntity<ApiResponse<PageResponse<AdvanceResponse>>> getPendingAdvances(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<AdvanceResponse> data = advanceService.getPendingAdvances(pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Pending advances fetched successfully"));
     }
 
     @GetMapping("/company")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<AdvanceResponse>>> getCompanyAdvances() {
-        List<AdvanceResponse> data = advanceService.getCompanyAdvances();
+    public ResponseEntity<ApiResponse<PageResponse<AdvanceResponse>>> getCompanyAdvances(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<AdvanceResponse> data = advanceService.getCompanyAdvances(pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Advances fetched successfully"));
     }
 

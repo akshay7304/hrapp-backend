@@ -2,6 +2,7 @@ package com.hrapp.service;
 
 import com.hrapp.dto.request.ManualAttendanceRequest;
 import com.hrapp.dto.response.AttendanceResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.entity.Attendance;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.CompanySettings;
@@ -19,6 +20,9 @@ import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -156,29 +160,30 @@ public class AttendanceService {
     }
 
     @Transactional(readOnly = true)
-    public List<AttendanceResponse> getCompanyAttendanceToday() {
+    public PageResponse<AttendanceResponse> getCompanyAttendanceToday(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        return attendanceRepository
-                .findByCompanyIdAndAttendanceDate(companyId, LocalDate.now())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by("user.fullName"));
+        return PageResponse.from(
+                attendanceRepository
+                        .findByCompanyIdAndAttendanceDate(companyId, LocalDate.now(), effective)
+                        .map(this::toResponse));
     }
 
     @Transactional(readOnly = true)
-    public List<AttendanceResponse> getEmployeeAttendanceHistory(Long employeeId, int month, int year) {
+    public PageResponse<AttendanceResponse> getEmployeeAttendanceHistory(
+            Long employeeId, int month, int year, Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         User employee = userRepository.findById(employeeId)
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
         ensureSameCompany(employee, companyId);
 
         YearMonth ym = YearMonth.of(year, month);
-        return attendanceRepository
-                .findByUserIdAndAttendanceDateBetween(employeeId, ym.atDay(1), ym.atEndOfMonth())
-                .stream()
-                .sorted(Comparator.comparing(Attendance::getAttendanceDate))
-                .map(this::toResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
+        return PageResponse.from(
+                attendanceRepository
+                        .findByUserIdAndAttendanceDateBetween(
+                                employeeId, ym.atDay(1), ym.atEndOfMonth(), effective)
+                        .map(this::toResponse));
     }
 
     @Transactional
@@ -244,6 +249,18 @@ public class AttendanceService {
             throw new BadRequestException("Caller is not bound to a company");
         }
         return companyId;
+    }
+
+    /**
+     * Apply a sensible default sort when the caller didn't supply one.
+     * Preserves the previously-hardcoded ordering of list endpoints now that
+     * pagination has replaced the explicit {@code ORDER BY} in the JPQL.
+     */
+    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
     }
 
     private void ensureSameCompany(User employee, Long callerCompanyId) {

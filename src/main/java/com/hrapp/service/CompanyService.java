@@ -9,6 +9,7 @@ import com.hrapp.dto.response.DepartmentResponse;
 import com.hrapp.dto.response.DesignationResponse;
 import com.hrapp.dto.response.HolidayResponse;
 import com.hrapp.dto.response.LeaveTypeResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.Department;
@@ -35,6 +36,9 @@ import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.repository.UserStatusRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -153,10 +157,17 @@ public class CompanyService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<CompanyResponse> getAllCompanies() {
-        return companyRepository.findAllByOrderByCreatedAtDesc().stream()
-                .map(c -> toCompanyResponse(c, (int) userRepository.countByCompanyId(c.getId())))
-                .toList();
+    public PageResponse<CompanyResponse> getAllCompanies(Pageable pageable) {
+        Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "createdAt"));
+        return PageResponse.from(companyRepository.findAll(effective)
+                .map(c -> toCompanyResponse(c, (int) userRepository.countByCompanyId(c.getId()))));
+    }
+
+    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
     }
 
     @Transactional(readOnly = true)

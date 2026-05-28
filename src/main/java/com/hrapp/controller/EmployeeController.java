@@ -5,10 +5,13 @@ import com.hrapp.dto.request.CreateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeStatusRequest;
 import com.hrapp.dto.response.EmployeeResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.service.EmployeeService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -18,9 +21,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/employees")
@@ -42,8 +44,11 @@ public class EmployeeController {
 
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<EmployeeResponse>>> getAllEmployees() {
-        List<EmployeeResponse> employees = employeeService.getAllEmployees();
+    public ResponseEntity<ApiResponse<PageResponse<EmployeeResponse>>> getAllEmployees(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<EmployeeResponse> employees = employeeService.getAllEmployees(pageable);
         return ResponseEntity.ok(ApiResponse.success(employees, "Employees retrieved successfully"));
     }
 

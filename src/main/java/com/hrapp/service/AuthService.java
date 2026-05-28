@@ -12,6 +12,7 @@ import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.security.JwtUtil;
+import com.hrapp.security.LoginAttemptService;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,21 +49,41 @@ public class AuthService {
     private final UserRoleRepository userRoleRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final LoginAttemptService loginAttemptService;
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
-        User user = userRepository.findByMobile(request.getMobile())
+        String mobile = request.getMobile();
+
+        if (loginAttemptService.isLocked(mobile)) {
+            log.warn("Login blocked — account already locked for mobile={}", mobile);
+            throw new UnauthorizedException(
+                    "Account temporarily locked due to too many failed attempts. "
+                            + "Try again after 30 minutes.");
+        }
+
+        User user = userRepository.findByMobile(mobile)
                 .orElseThrow(() -> {
-                    log.warn("Login failed — mobile not registered: {}", request.getMobile());
+                    log.warn("Login failed — mobile not registered: {}", mobile);
                     return new ResourceNotFoundException("User not found");
                 });
 
         ensureLoginAllowed(user);
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            log.warn("Login failed — invalid password for mobile: {}", request.getMobile());
-            throw new UnauthorizedException("Invalid mobile or password");
+            log.warn("Login failed — invalid password for mobile: {}", mobile);
+            loginAttemptService.recordFailedAttempt(mobile);
+            int remaining = loginAttemptService.getRemainingAttempts(mobile);
+            if (remaining > 0) {
+                throw new UnauthorizedException(
+                        "Invalid mobile or password. " + remaining + " attempts remaining.");
+            }
+            throw new UnauthorizedException(
+                    "Account locked due to too many failed attempts. "
+                            + "Try again after 30 minutes.");
         }
+
+        loginAttemptService.recordSuccessfulLogin(mobile);
 
         List<String> roles = fetchRoleNames(user.getId());
         return buildLoginResponse(user, roles);

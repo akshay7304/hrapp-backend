@@ -1,6 +1,9 @@
 package com.hrapp.repository;
 
 import com.hrapp.entity.User;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -30,6 +33,16 @@ public interface UserRepository extends JpaRepository<User, Long> {
             "LEFT JOIN FETCH u.status " +
             "WHERE u.company.id = :companyId")
     List<User> findByCompanyId(@Param("companyId") Long companyId);
+
+    /**
+     * Paginated company-scoped user lookup. Uses an {@link EntityGraph}
+     * instead of JPQL {@code JOIN FETCH} because the latter combined with
+     * {@code Pageable} forces Hibernate to paginate in-memory
+     * ({@code HHH000104}). All fetched associations are {@code *-to-one},
+     * so the outer-join + {@code LIMIT/OFFSET} combination is safe.
+     */
+    @EntityGraph(attributePaths = {"company", "department", "designation", "status"})
+    Page<User> findByCompanyId(Long companyId, Pageable pageable);
 
     /**
      * Fetches all employees of a company whose {@code status.name} matches

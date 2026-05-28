@@ -4,6 +4,7 @@ import com.hrapp.dto.request.ActionLeaveRequest;
 import com.hrapp.dto.request.ApplyLeaveRequest;
 import com.hrapp.dto.response.LeaveBalanceResponse;
 import com.hrapp.dto.response.LeaveRequestResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.entity.Attendance;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.Holiday;
@@ -29,6 +30,9 @@ import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,7 +42,6 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -351,38 +354,46 @@ public class LeaveService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<LeaveRequestResponse> getMyLeaveRequests(Integer month, Integer year) {
+    public PageResponse<LeaveRequestResponse> getMyLeaveRequests(
+            Integer month, Integer year, Pageable pageable) {
         Long userId = requireCallerUserId();
         YearMonth ym = YearMonth.of(year, month);
-        return leaveRequestRepository
-                .findByUserIdAndFromDateBetween(userId, ym.atDay(1), ym.atEndOfMonth())
-                .stream()
-                .sorted(Comparator.comparing(LeaveRequest::getAppliedAt).reversed())
-                .map(this::toRequestResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "appliedAt"));
+        return PageResponse.from(
+                leaveRequestRepository
+                        .findByUserIdAndFromDateBetween(
+                                userId, ym.atDay(1), ym.atEndOfMonth(), effective)
+                        .map(this::toRequestResponse));
     }
 
     @Transactional(readOnly = true)
-    public List<LeaveRequestResponse> getPendingLeaveRequests() {
+    public PageResponse<LeaveRequestResponse> getPendingLeaveRequests(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        return leaveRequestRepository
-                .findByUser_CompanyIdAndStatus(companyId, LeaveRequestStatus.PENDING)
-                .stream()
-                .sorted(Comparator.comparing(LeaveRequest::getAppliedAt))
-                .map(this::toRequestResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by("appliedAt"));
+        return PageResponse.from(
+                leaveRequestRepository
+                        .findByUser_CompanyIdAndStatus(companyId, LeaveRequestStatus.PENDING, effective)
+                        .map(this::toRequestResponse));
     }
 
     @Transactional(readOnly = true)
-    public List<LeaveRequestResponse> getCompanyLeaveRequests(Integer month, Integer year) {
+    public PageResponse<LeaveRequestResponse> getCompanyLeaveRequests(
+            Integer month, Integer year, Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         YearMonth ym = YearMonth.of(year, month);
-        return leaveRequestRepository
-                .findByUser_CompanyIdAndFromDateBetween(companyId, ym.atDay(1), ym.atEndOfMonth())
-                .stream()
-                .sorted(Comparator.comparing(LeaveRequest::getAppliedAt).reversed())
-                .map(this::toRequestResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "appliedAt"));
+        return PageResponse.from(
+                leaveRequestRepository
+                        .findByUser_CompanyIdAndFromDateBetween(
+                                companyId, ym.atDay(1), ym.atEndOfMonth(), effective)
+                        .map(this::toRequestResponse));
+    }
+
+    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
     }
 
     // ============================================================

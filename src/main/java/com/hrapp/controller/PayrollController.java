@@ -5,6 +5,7 @@ import com.hrapp.dto.request.MarkPaidRequest;
 import com.hrapp.dto.request.RunPayrollRequest;
 import com.hrapp.dto.request.SalaryAdjustmentRequest;
 import com.hrapp.dto.request.SalaryStructureRequest;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.SalaryAdjustmentResponse;
 import com.hrapp.dto.response.SalaryPaymentResponse;
 import com.hrapp.dto.response.SalaryStructureResponse;
@@ -12,6 +13,8 @@ import com.hrapp.service.PayrollService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -93,10 +97,13 @@ public class PayrollController {
 
     @GetMapping("/{month}/{year}")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<SalaryPaymentResponse>>> getPayroll(
+    public ResponseEntity<ApiResponse<PageResponse<SalaryPaymentResponse>>> getPayroll(
             @PathVariable("month") Integer month,
-            @PathVariable("year") Integer year) {
-        List<SalaryPaymentResponse> data = payrollService.getPayroll(month, year);
+            @PathVariable("year") Integer year,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<SalaryPaymentResponse> data = payrollService.getPayroll(month, year, pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Payroll fetched successfully"));
     }
 

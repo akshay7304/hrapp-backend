@@ -4,6 +4,7 @@ import com.hrapp.dto.request.CreateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeStatusRequest;
 import com.hrapp.dto.response.EmployeeResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.Department;
 import com.hrapp.entity.Designation;
@@ -25,6 +26,8 @@ import com.hrapp.repository.UserStatusRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -120,23 +123,24 @@ public class EmployeeService {
     }
 
     @Transactional(readOnly = true)
-    public List<EmployeeResponse> getAllEmployees() {
+    public PageResponse<EmployeeResponse> getAllEmployees(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        List<User> users = userRepository.findByCompanyId(companyId);
+        Page<User> users = userRepository.findByCompanyId(companyId, pageable);
         if (users.isEmpty()) {
-            return Collections.emptyList();
+            return PageResponse.from(users.map(u -> toResponse(u, Collections.emptyList())));
         }
 
-        List<Long> userIds = users.stream().map(User::getId).toList();
+        // Fetch roles only for the users on this page — keeps the join
+        // small and avoids loading roles for everyone in the company.
+        List<Long> userIds = users.getContent().stream().map(User::getId).toList();
         Map<Long, List<String>> rolesByUser = userRoleRepository.findByUserIdIn(userIds).stream()
                 .collect(Collectors.groupingBy(
                         ur -> ur.getUser().getId(),
                         Collectors.mapping(ur -> ur.getRole().getName(), Collectors.toList())
                 ));
 
-        return users.stream()
-                .map(u -> toResponse(u, rolesByUser.getOrDefault(u.getId(), Collections.emptyList())))
-                .toList();
+        return PageResponse.from(users.map(u ->
+                toResponse(u, rolesByUser.getOrDefault(u.getId(), Collections.emptyList()))));
     }
 
     @Transactional(readOnly = true)

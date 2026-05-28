@@ -5,10 +5,13 @@ import com.hrapp.dto.request.ActionLeaveRequest;
 import com.hrapp.dto.request.ApplyLeaveRequest;
 import com.hrapp.dto.response.LeaveBalanceResponse;
 import com.hrapp.dto.response.LeaveRequestResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.service.LeaveService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -81,26 +84,35 @@ public class LeaveController {
     }
 
     @GetMapping("/my")
-    public ResponseEntity<ApiResponse<List<LeaveRequestResponse>>> getMyLeaveRequests(
+    public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getMyLeaveRequests(
             @RequestParam Integer month,
-            @RequestParam Integer year) {
-        List<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year);
+            @RequestParam Integer year,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave requests fetched successfully"));
     }
 
     @GetMapping("/pending")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<LeaveRequestResponse>>> getPendingLeaveRequests() {
-        List<LeaveRequestResponse> data = leaveService.getPendingLeaveRequests();
+    public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getPendingLeaveRequests(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<LeaveRequestResponse> data = leaveService.getPendingLeaveRequests(pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Pending leave requests fetched successfully"));
     }
 
     @GetMapping("/company")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<LeaveRequestResponse>>> getCompanyLeaveRequests(
+    public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getCompanyLeaveRequests(
             @RequestParam Integer month,
-            @RequestParam Integer year) {
-        List<LeaveRequestResponse> data = leaveService.getCompanyLeaveRequests(month, year);
+            @RequestParam Integer year,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<LeaveRequestResponse> data = leaveService.getCompanyLeaveRequests(month, year, pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave requests fetched successfully"));
     }
 

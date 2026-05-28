@@ -3,10 +3,13 @@ package com.hrapp.controller;
 import com.hrapp.ApiResponse;
 import com.hrapp.dto.request.ManualAttendanceRequest;
 import com.hrapp.dto.response.AttendanceResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.service.AttendanceService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -62,19 +65,25 @@ public class AttendanceController {
 
     @GetMapping("/company/today")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<AttendanceResponse>>> getCompanyAttendanceToday() {
-        List<AttendanceResponse> attendance = attendanceService.getCompanyAttendanceToday();
+    public ResponseEntity<ApiResponse<PageResponse<AttendanceResponse>>> getCompanyAttendanceToday(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<AttendanceResponse> attendance = attendanceService.getCompanyAttendanceToday(pageable);
         return ResponseEntity.ok(ApiResponse.success(attendance, "Company attendance retrieved successfully"));
     }
 
     @GetMapping("/employee/{id}/history")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
-    public ResponseEntity<ApiResponse<List<AttendanceResponse>>> getEmployeeAttendanceHistory(
+    public ResponseEntity<ApiResponse<PageResponse<AttendanceResponse>>> getEmployeeAttendanceHistory(
             @PathVariable("id") Long employeeId,
             @RequestParam int month,
-            @RequestParam int year) {
-        List<AttendanceResponse> history =
-                attendanceService.getEmployeeAttendanceHistory(employeeId, month, year);
+            @RequestParam int year,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<AttendanceResponse> history =
+                attendanceService.getEmployeeAttendanceHistory(employeeId, month, year, pageable);
         return ResponseEntity.ok(ApiResponse.success(history, "Employee attendance history retrieved successfully"));
     }
 

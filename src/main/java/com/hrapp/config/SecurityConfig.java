@@ -6,6 +6,10 @@ import com.hrapp.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.access.expression.method.DefaultMethodSecurityExpressionHandler;
+import org.springframework.security.access.expression.method.MethodSecurityExpressionHandler;
+import org.springframework.security.access.hierarchicalroles.RoleHierarchy;
+import org.springframework.security.access.hierarchicalroles.RoleHierarchyImpl;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -47,6 +51,47 @@ public class SecurityConfig {
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
+    }
+
+    /**
+     * Role hierarchy so higher-privileged roles automatically satisfy
+     * lower-privileged role checks without having to list every role in
+     * every {@code @PreAuthorize}. Read as "X implies Y" — a holder of X
+     * passes any check that requires Y.
+     * <ul>
+     *   <li>SUPERADMIN → ADMIN, HR, EMPLOYEE</li>
+     *   <li>ADMIN → HR, EMPLOYEE</li>
+     *   <li>HR → EMPLOYEE</li>
+     * </ul>
+     * The {@code withDefaultRolePrefix()} builder prepends {@code ROLE_} so
+     * the entries match the authorities granted by
+     * {@code CustomUserDetailsService}.
+     */
+    @Bean
+    public RoleHierarchy roleHierarchy() {
+        return RoleHierarchyImpl.withDefaultRolePrefix()
+                .role("SUPERADMIN").implies("ADMIN", "HR", "EMPLOYEE")
+                .role("ADMIN").implies("HR", "EMPLOYEE")
+                .role("HR").implies("EMPLOYEE")
+                .build();
+    }
+
+    /**
+     * Wires the {@link RoleHierarchy} into the {@code @PreAuthorize} /
+     * {@code @PostAuthorize} expression evaluator. Without this, the
+     * hierarchy is only consulted by URL-rule checks
+     * ({@code .hasRole(...)} in the DSL).
+     *
+     * <p>Note: the old {@code RoleHierarchyVoter} no longer exists — voters
+     * were removed in Spring Security 6.0. For URL-level rules, exposing a
+     * {@link RoleHierarchy} bean is sufficient; the modern
+     * {@code AuthorityAuthorizationManager} picks it up automatically.
+     */
+    @Bean
+    public MethodSecurityExpressionHandler methodSecurityExpressionHandler(RoleHierarchy roleHierarchy) {
+        DefaultMethodSecurityExpressionHandler handler = new DefaultMethodSecurityExpressionHandler();
+        handler.setRoleHierarchy(roleHierarchy);
+        return handler;
     }
 
     @Bean

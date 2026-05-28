@@ -3,6 +3,7 @@ package com.hrapp.service;
 import com.hrapp.dto.request.ActionAdvanceRequest;
 import com.hrapp.dto.request.AdvanceRequest;
 import com.hrapp.dto.response.AdvanceResponse;
+import com.hrapp.dto.response.PageResponse;
 import com.hrapp.entity.Advance;
 import com.hrapp.entity.User;
 import com.hrapp.enums.AdvanceStatus;
@@ -15,6 +16,9 @@ import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -106,20 +110,27 @@ public class AdvanceService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public List<AdvanceResponse> getPendingAdvances() {
+    public PageResponse<AdvanceResponse> getPendingAdvances(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        return advanceRepository
-                .findByUser_CompanyIdAndStatus(companyId, AdvanceStatus.PENDING).stream()
-                .map(this::toResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by("createdAt"));
+        return PageResponse.from(advanceRepository
+                .findByUser_CompanyIdAndStatus(companyId, AdvanceStatus.PENDING, effective)
+                .map(this::toResponse));
     }
 
     @Transactional(readOnly = true)
-    public List<AdvanceResponse> getCompanyAdvances() {
+    public PageResponse<AdvanceResponse> getCompanyAdvances(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        return advanceRepository.findByUser_CompanyIdOrderByCreatedAtDesc(companyId).stream()
-                .map(this::toResponse)
-                .toList();
+        return PageResponse.from(advanceRepository
+                .findByUser_CompanyIdOrderByCreatedAtDesc(companyId, pageable)
+                .map(this::toResponse));
+    }
+
+    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
     }
 
     @Transactional
