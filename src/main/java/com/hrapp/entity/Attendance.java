@@ -87,6 +87,10 @@ public class Attendance {
     @Builder.Default
     private Boolean isManual = false;
 
+    @Column(name = "is_auto_checkout", nullable = false)
+    @Builder.Default
+    private Boolean isAutoCheckout = false;
+
     @Column(name = "manual_reason", columnDefinition = "TEXT")
     private String manualReason;
 

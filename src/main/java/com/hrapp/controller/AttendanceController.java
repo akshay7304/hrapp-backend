@@ -4,7 +4,10 @@ import com.hrapp.ApiResponse;
 import com.hrapp.dto.request.ManualAttendanceRequest;
 import com.hrapp.dto.response.AttendanceResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.exception.BadRequestException;
+import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.service.AttendanceService;
+import com.hrapp.security.SecurityUtil;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +34,16 @@ public class AttendanceController {
 
     private final AttendanceService attendanceService;
 
+    /**
+     * FE GUIDANCE:
+     * On home screen do NOT show attendance.status field directly.
+     * Instead use this logic:
+     * - checkIn == null → show "Not Checked In" button
+     * - checkIn != null && checkOut == null → show "Checked In ✓" + "Check Out" button
+     * - checkIn != null && checkOut != null → show "Day Complete"
+     * The status field (PRESENT/ABSENT/HALF_DAY) is for reports only.
+     * isAutoCheckout = true means system auto-closed this — HR should review.
+     */
     @PostMapping("/check-in")
     @PreAuthorize("hasRole('EMPLOYEE')")
     public ResponseEntity<ApiResponse<AttendanceResponse>> checkIn() {
@@ -93,5 +106,23 @@ public class AttendanceController {
             @Valid @RequestBody ManualAttendanceRequest request) {
         AttendanceResponse response = attendanceService.markManualAttendance(request);
         return ResponseEntity.ok(ApiResponse.success(response, "Manual attendance recorded successfully"));
+    }
+
+    @PostMapping("/auto-checkout")
+    @PreAuthorize("hasAnyRole('ADMIN','HR')")
+    public ResponseEntity<ApiResponse<String>> triggerAutoCheckout(
+            @RequestParam(required = false) Long companyId) {
+        Long effectiveCompanyId = companyId != null ? companyId : SecurityUtil.getCurrentUserCompanyId();
+        if (effectiveCompanyId == null) {
+            throw new BadRequestException("companyId is required when caller is not bound to a company");
+        }
+        Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();
+        if (callerCompanyId != null && !callerCompanyId.equals(effectiveCompanyId)) {
+            throw new UnauthorizedException("Cannot run auto checkout for another company");
+        }
+        int count = attendanceService.autoCheckoutMissed(effectiveCompanyId);
+        return ResponseEntity.ok(ApiResponse.success(
+                null,
+                "Auto checkout processed " + count + " record(s) for company " + effectiveCompanyId));
     }
 }

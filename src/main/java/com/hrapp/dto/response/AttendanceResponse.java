@@ -29,5 +29,6 @@ public class AttendanceResponse {
     private String status;
     private String source;
     private Boolean isManual;
+    private Boolean isAutoCheckout;
     private String manualReason;
 }

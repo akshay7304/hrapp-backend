@@ -138,6 +138,44 @@ public class AttendanceService {
         return toResponse(attendance);
     }
 
+    /**
+     * Closes open attendance rows at shift end for employees who forgot to check out.
+     * Intended to run nightly via {@link com.hrapp.config.MidnightAttendanceScheduler}.
+     */
+    @Transactional
+    public int autoCheckoutMissed(Long companyId) {
+        LocalDate today = LocalDate.now();
+
+        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
+                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+
+        if (settings.getShiftEndTime() == null) {
+            log.warn("Auto checkout skipped for companyId={} — shift_end_time not configured", companyId);
+            return 0;
+        }
+
+        List<Attendance> openRecords = attendanceRepository
+                .findByCompanyIdAndAttendanceDateAndCheckInIsNotNullAndCheckOutIsNull(companyId, today);
+
+        int processed = 0;
+        for (Attendance attendance : openRecords) {
+            LocalDateTime checkOutTime = today.atTime(settings.getShiftEndTime());
+            attendance.setCheckOut(checkOutTime);
+
+            BigDecimal worked = calculateHours(attendance.getCheckIn(), checkOutTime);
+            attendance.setWorkedHours(worked);
+            attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
+            attendance.setStatus(deriveStatus(worked, settings));
+            attendance.setIsAutoCheckout(true);
+
+            attendanceRepository.save(attendance);
+            processed++;
+        }
+
+        log.info("Auto checkout processed {} records for companyId={}", processed, companyId);
+        return processed;
+    }
+
     @Transactional(readOnly = true)
     public AttendanceResponse getTodayAttendance() {
         Long userId = requireCallerUserId();
@@ -330,6 +368,7 @@ public class AttendanceService {
                 .status(attendance.getStatus() != null ? attendance.getStatus().name() : null)
                 .source(attendance.getSource() != null ? attendance.getSource().name() : null)
                 .isManual(attendance.getIsManual())
+                .isAutoCheckout(attendance.getIsAutoCheckout())
                 .manualReason(attendance.getManualReason())
                 .build();
     }
