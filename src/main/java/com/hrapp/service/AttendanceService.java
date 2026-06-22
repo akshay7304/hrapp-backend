@@ -3,16 +3,20 @@ package com.hrapp.service;
 import com.hrapp.dto.request.ManualAttendanceRequest;
 import com.hrapp.dto.response.AttendanceResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.dto.response.PunchResponse;
 import com.hrapp.entity.Attendance;
+import com.hrapp.entity.AttendancePunch;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.User;
 import com.hrapp.enums.AttendanceSource;
 import com.hrapp.enums.AttendanceStatus;
+import com.hrapp.enums.PunchType;
 import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
+import com.hrapp.repository.AttendancePunchRepository;
 import com.hrapp.repository.AttendanceRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.HolidayRepository;
@@ -33,18 +37,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 
 /**
- * Daily attendance lifecycle:
- * <ol>
- *   <li>{@link #checkIn()} — creates today's row, marking holiday / week-off
- *       statuses automatically when applicable.</li>
- *   <li>{@link #checkOut()} — closes the row, derives worked / overtime hours
- *       and final status from {@code CompanySettings}.</li>
- * </ol>
- * Admin / HR can also create or override rows via {@link #markManualAttendance}.
+ * Daily attendance with multiple IN/OUT punches per day.
+ * Employee may check out at any time; after checkout they can check in again.
+ * {@code workedHours} sums all paired IN→OUT durations (gaps between OUT and next IN are excluded).
  */
 @Service
 @RequiredArgsConstructor
@@ -52,6 +53,7 @@ import java.util.List;
 public class AttendanceService {
 
     private final AttendanceRepository attendanceRepository;
+    private final AttendancePunchRepository attendancePunchRepository;
     private final UserRepository userRepository;
     private final CompanySettingsRepository companySettingsRepository;
     private final HolidayRepository holidayRepository;
@@ -61,9 +63,17 @@ public class AttendanceService {
         Long userId = requireCallerUserId();
         Long companyId = requireCallerCompanyId();
         LocalDate today = LocalDate.now();
+        LocalDateTime now = LocalDateTime.now();
 
-        if (attendanceRepository.existsByUserIdAndAttendanceDate(userId, today)) {
-            throw new ConflictException("Already checked in today");
+        if (holidayRepository.existsByCompanyIdAndHolidayDate(companyId, today)) {
+            throw new BadRequestException("Cannot check in on holiday");
+        }
+
+        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
+                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+
+        if (isWeekOff(today, settings.getWeekOffDay())) {
+            throw new BadRequestException("Cannot check in on week off");
         }
 
         User user = userRepository.findById(userId)
@@ -73,35 +83,44 @@ public class AttendanceService {
             throw new BadRequestException("User is not bound to a company");
         }
 
-        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
-                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+        Attendance attendance = attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
+                .orElseGet(() -> Attendance.builder()
+                        .user(user)
+                        .company(company)
+                        .attendanceDate(today)
+                        .workedHours(BigDecimal.ZERO)
+                        .overtimeHours(BigDecimal.ZERO)
+                        .status(AttendanceStatus.PRESENT)
+                        .source(AttendanceSource.MOBILE)
+                        .isManual(false)
+                        .isAutoCheckout(false)
+                        .build());
 
-        AttendanceStatus status;
-        LocalDateTime checkInTime = null;
-
-        if (holidayRepository.existsByCompanyIdAndHolidayDate(companyId, today)) {
-            status = AttendanceStatus.HOLIDAY;
-        } else if (isWeekOff(today, settings.getWeekOffDay())) {
-            status = AttendanceStatus.WEEK_OFF;
-        } else {
-            status = AttendanceStatus.PRESENT;
-            checkInTime = LocalDateTime.now();
+        if (attendance.getId() != null) {
+            Optional<AttendancePunch> lastPunch = getLastPunch(attendance.getId());
+            if (!canCheckIn(attendance, lastPunch)) {
+                throw new ConflictException("Already checked in. Please check out first.");
+            }
         }
 
-        Attendance attendance = Attendance.builder()
-                .user(user)
-                .company(company)
-                .attendanceDate(today)
-                .checkIn(checkInTime)
-                .workedHours(BigDecimal.ZERO)
-                .overtimeHours(BigDecimal.ZERO)
-                .status(status)
-                .source(AttendanceSource.MOBILE)
-                .isManual(false)
-                .build();
+        boolean firstPunchOfDay = attendance.getId() == null
+                || attendancePunchRepository.countByAttendanceId(attendance.getId()) == 0;
+        if (firstPunchOfDay) {
+            attendance.setCheckIn(now);
+        }
+
         attendance = attendanceRepository.save(attendance);
 
-        log.info("Check-in user={} date={} status={}", userId, today, status);
+        AttendancePunch punch = AttendancePunch.builder()
+                .attendance(attendance)
+                .user(user)
+                .punchTime(now)
+                .punchType(PunchType.IN)
+                .source(AttendanceSource.MOBILE)
+                .build();
+        attendancePunchRepository.save(punch);
+
+        log.info("Check-in user={} date={} punchId={}", userId, today, punch.getId());
         return toResponse(attendance);
     }
 
@@ -110,24 +129,36 @@ public class AttendanceService {
         Long userId = requireCallerUserId();
         Long companyId = requireCallerCompanyId();
         LocalDate today = LocalDate.now();
+        LocalDateTime now = LocalDateTime.now();
 
         Attendance attendance = attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
                 .orElseThrow(() -> new ResourceNotFoundException("No check-in found for today"));
 
-        if (attendance.getCheckOut() != null) {
-            throw new ConflictException("Already checked out today");
-        }
-        if (attendance.getCheckIn() == null) {
-            throw new BadRequestException("Cannot check out — no check-in recorded for today");
+        Optional<AttendancePunch> lastPunch = attendance.getId() != null
+                ? getLastPunch(attendance.getId())
+                : Optional.empty();
+        if (!canCheckOut(attendance, lastPunch)) {
+            throw new ConflictException("Not checked in. Please check in first.");
         }
 
         CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
                 .orElseThrow(() -> new BadRequestException("Company settings not configured"));
 
-        LocalDateTime checkOutTime = LocalDateTime.now();
-        attendance.setCheckOut(checkOutTime);
+        User user = attendance.getUser();
+        AttendancePunch punch = AttendancePunch.builder()
+                .attendance(attendance)
+                .user(user)
+                .punchTime(now)
+                .punchType(PunchType.OUT)
+                .source(AttendanceSource.MOBILE)
+                .build();
+        attendancePunchRepository.save(punch);
 
-        BigDecimal worked = calculateHours(attendance.getCheckIn(), checkOutTime);
+        attendance.setCheckOut(now);
+
+        List<AttendancePunch> punches = attendancePunchRepository
+                .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
+        BigDecimal worked = calculateWorkedHours(punches);
         attendance.setWorkedHours(worked);
         attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
         attendance.setStatus(deriveStatus(worked, settings));
@@ -154,19 +185,37 @@ public class AttendanceService {
             return 0;
         }
 
-        List<Attendance> openRecords = attendanceRepository
-                .findByCompanyIdAndAttendanceDateAndCheckInIsNotNullAndCheckOutIsNull(companyId, today);
+        List<Attendance> candidates = attendanceRepository
+                .findByCompanyIdAndAttendanceDateAndCheckInIsNotNull(companyId, today);
 
         int processed = 0;
-        for (Attendance attendance : openRecords) {
-            LocalDateTime checkOutTime = today.atTime(settings.getShiftEndTime());
-            attendance.setCheckOut(checkOutTime);
+        for (Attendance attendance : candidates) {
+            Optional<AttendancePunch> lastPunch = getLastPunch(attendance.getId());
+            if (!canCheckOut(attendance, lastPunch)) {
+                continue;
+            }
 
-            BigDecimal worked = calculateHours(attendance.getCheckIn(), checkOutTime);
+            LocalDateTime checkOutTime = today.atTime(settings.getShiftEndTime());
+            User user = attendance.getUser();
+
+            AttendancePunch punch = AttendancePunch.builder()
+                    .attendance(attendance)
+                    .user(user)
+                    .punchTime(checkOutTime)
+                    .punchType(PunchType.OUT)
+                    .source(AttendanceSource.MANUAL)
+                    .build();
+            attendancePunchRepository.save(punch);
+
+            attendance.setCheckOut(checkOutTime);
+            attendance.setIsAutoCheckout(true);
+
+            List<AttendancePunch> punches = attendancePunchRepository
+                    .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
+            BigDecimal worked = calculateWorkedHours(punches);
             attendance.setWorkedHours(worked);
             attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
             attendance.setStatus(deriveStatus(worked, settings));
-            attendance.setIsAutoCheckout(true);
 
             attendanceRepository.save(attendance);
             processed++;
@@ -186,15 +235,15 @@ public class AttendanceService {
     }
 
     @Transactional(readOnly = true)
-    public List<AttendanceResponse> getMyAttendanceHistory(int month, int year) {
+    public PageResponse<AttendanceResponse> getMyAttendanceHistory(int month, int year, Pageable pageable) {
         Long userId = requireCallerUserId();
         YearMonth ym = YearMonth.of(year, month);
-        return attendanceRepository
-                .findByUserIdAndAttendanceDateBetween(userId, ym.atDay(1), ym.atEndOfMonth())
-                .stream()
-                .sorted(Comparator.comparing(Attendance::getAttendanceDate))
-                .map(this::toResponse)
-                .toList();
+        Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
+        return PageResponse.from(
+                attendanceRepository
+                        .findByUserIdAndAttendanceDateBetween(
+                                userId, ym.atDay(1), ym.atEndOfMonth(), effective)
+                        .map(this::toResponse));
     }
 
     @Transactional(readOnly = true)
@@ -259,12 +308,37 @@ public class AttendanceService {
         if (request.getCheckIn() != null && request.getCheckOut() != null) {
             CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
                     .orElseThrow(() -> new BadRequestException("Company settings not configured"));
-            BigDecimal worked = calculateHours(request.getCheckIn(), request.getCheckOut());
+
+            attendance = attendanceRepository.save(attendance);
+
+            attendancePunchRepository.deleteByAttendanceId(attendance.getId());
+
+            attendancePunchRepository.save(AttendancePunch.builder()
+                    .attendance(attendance)
+                    .user(employee)
+                    .punchTime(request.getCheckIn())
+                    .punchType(PunchType.IN)
+                    .source(AttendanceSource.MANUAL)
+                    .build());
+            attendancePunchRepository.save(AttendancePunch.builder()
+                    .attendance(attendance)
+                    .user(employee)
+                    .punchTime(request.getCheckOut())
+                    .punchType(PunchType.OUT)
+                    .source(AttendanceSource.MANUAL)
+                    .build());
+
+            List<AttendancePunch> punches = attendancePunchRepository
+                    .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
+            BigDecimal worked = calculateWorkedHours(punches);
             attendance.setWorkedHours(worked);
             attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
         } else {
             attendance.setWorkedHours(BigDecimal.ZERO);
             attendance.setOvertimeHours(BigDecimal.ZERO);
+            if (attendance.getId() != null) {
+                attendancePunchRepository.deleteByAttendanceId(attendance.getId());
+            }
         }
 
         attendance = attendanceRepository.save(attendance);
@@ -289,11 +363,6 @@ public class AttendanceService {
         return companyId;
     }
 
-    /**
-     * Apply a sensible default sort when the caller didn't supply one.
-     * Preserves the previously-hardcoded ordering of list endpoints now that
-     * pagination has replaced the explicit {@code ORDER BY} in the JPQL.
-     */
     private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
         if (pageable.getSort().isSorted()) {
             return pageable;
@@ -321,6 +390,71 @@ public class AttendanceService {
             log.warn("Invalid week-off day configured: '{}'", weekOffDay);
             return false;
         }
+    }
+
+    private Optional<AttendancePunch> getLastPunch(Long attendanceId) {
+        return attendancePunchRepository.findFirstByAttendanceIdOrderByPunchTimeDesc(attendanceId);
+    }
+
+    private boolean canCheckIn(Attendance attendance, Optional<AttendancePunch> lastPunch) {
+        if (lastPunch.isEmpty()) {
+            if (attendance.getCheckIn() == null) {
+                return true;
+            }
+            return attendance.getCheckOut() != null;
+        }
+        return lastPunch.get().getPunchType() == PunchType.OUT;
+    }
+
+    private boolean canCheckOut(Attendance attendance, Optional<AttendancePunch> lastPunch) {
+        if (lastPunch.isEmpty()) {
+            return attendance.getCheckIn() != null && attendance.getCheckOut() == null;
+        }
+        return lastPunch.get().getPunchType() == PunchType.IN;
+    }
+
+    private BigDecimal calculateWorkedHours(List<AttendancePunch> punches) {
+        List<AttendancePunch> sorted = punches.stream()
+                .sorted(Comparator.comparing(AttendancePunch::getPunchTime))
+                .toList();
+
+        BigDecimal total = BigDecimal.ZERO;
+        LocalDateTime openIn = null;
+        for (AttendancePunch punch : sorted) {
+            if (punch.getPunchType() == PunchType.IN) {
+                openIn = punch.getPunchTime();
+            } else if (punch.getPunchType() == PunchType.OUT && openIn != null) {
+                total = total.add(calculateHours(openIn, punch.getPunchTime()));
+                openIn = null;
+            }
+        }
+        return total.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private int countCompleteSessions(List<AttendancePunch> punches) {
+        List<AttendancePunch> sorted = punches.stream()
+                .sorted(Comparator.comparing(AttendancePunch::getPunchTime))
+                .toList();
+
+        int sessions = 0;
+        LocalDateTime openIn = null;
+        for (AttendancePunch punch : sorted) {
+            if (punch.getPunchType() == PunchType.IN) {
+                openIn = punch.getPunchTime();
+            } else if (punch.getPunchType() == PunchType.OUT && openIn != null) {
+                sessions++;
+                openIn = null;
+            }
+        }
+        return sessions;
+    }
+
+    private boolean isCheckedIn(List<AttendancePunch> punches, Attendance attendance) {
+        if (punches.isEmpty()) {
+            return attendance.getCheckIn() != null && attendance.getCheckOut() == null;
+        }
+        AttendancePunch last = punches.get(punches.size() - 1);
+        return last.getPunchType() == PunchType.IN;
     }
 
     private BigDecimal calculateHours(LocalDateTime from, LocalDateTime to) {
@@ -353,8 +487,25 @@ public class AttendanceService {
         return AttendanceStatus.ABSENT;
     }
 
+    private PunchResponse toPunchResponse(AttendancePunch punch) {
+        return PunchResponse.builder()
+                .id(punch.getId())
+                .punchTime(punch.getPunchTime())
+                .punchType(punch.getPunchType() != null ? punch.getPunchType().name() : null)
+                .source(punch.getSource() != null ? punch.getSource().name() : null)
+                .build();
+    }
+
     private AttendanceResponse toResponse(Attendance attendance) {
         User user = attendance.getUser();
+        List<AttendancePunch> punches = attendance.getId() != null
+                ? attendancePunchRepository.findByAttendanceIdOrderByPunchTimeAsc(attendance.getId())
+                : new ArrayList<>();
+
+        List<PunchResponse> punchResponses = punches.stream()
+                .map(this::toPunchResponse)
+                .toList();
+
         return AttendanceResponse.builder()
                 .id(attendance.getId())
                 .userId(user != null ? user.getId() : null)
@@ -370,6 +521,9 @@ public class AttendanceService {
                 .isManual(attendance.getIsManual())
                 .isAutoCheckout(attendance.getIsAutoCheckout())
                 .manualReason(attendance.getManualReason())
+                .punches(punchResponses)
+                .totalSessions(countCompleteSessions(punches))
+                .isCheckedIn(isCheckedIn(punches, attendance))
                 .build();
     }
 }

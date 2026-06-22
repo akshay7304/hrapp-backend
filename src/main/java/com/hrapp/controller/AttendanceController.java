@@ -24,8 +24,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-
 @RestController
 @RequestMapping("/attendance")
 @RequiredArgsConstructor
@@ -35,14 +33,16 @@ public class AttendanceController {
     private final AttendanceService attendanceService;
 
     /**
-     * FE GUIDANCE:
-     * On home screen do NOT show attendance.status field directly.
-     * Instead use this logic:
-     * - checkIn == null → show "Not Checked In" button
-     * - checkIn != null && checkOut == null → show "Checked In ✓" + "Check Out" button
-     * - checkIn != null && checkOut != null → show "Day Complete"
-     * The status field (PRESENT/ABSENT/HALF_DAY) is for reports only.
-     * isAutoCheckout = true means system auto-closed this — HR should review.
+     * FE GUIDANCE — Multiple punch support:
+     * - Call check-in when employee starts or resumes work
+     * - Call check-out when employee stops work (any time while checked in)
+     * - After checkout, employee can check in again the same day
+     * - Use isCheckedIn for the home-screen button:
+     *   isCheckedIn = true → show "Check Out"
+     *   isCheckedIn = false → show "Check In"
+     * - Show punches list so employee can see all sessions
+     * - workedHours = sum of all IN→OUT pairs (gaps excluded)
+     * - Do NOT show attendance.status on home screen (reports only)
      */
     @PostMapping("/check-in")
     @PreAuthorize("hasRole('EMPLOYEE')")
@@ -53,6 +53,11 @@ public class AttendanceController {
                 .body(ApiResponse.success(response, "Checked in successfully"));
     }
 
+    /**
+     * FE GUIDANCE:
+     * Employee may check out at any time while isCheckedIn = true.
+     * Multiple check-in/check-out cycles per day are allowed.
+     */
     @PostMapping("/check-out")
     @PreAuthorize("hasRole('EMPLOYEE')")
     public ResponseEntity<ApiResponse<AttendanceResponse>> checkOut() {
@@ -69,10 +74,14 @@ public class AttendanceController {
 
     @GetMapping("/my-history")
     @PreAuthorize("hasRole('EMPLOYEE')")
-    public ResponseEntity<ApiResponse<List<AttendanceResponse>>> getMyAttendanceHistory(
+    public ResponseEntity<ApiResponse<PageResponse<AttendanceResponse>>> getMyAttendanceHistory(
             @RequestParam int month,
-            @RequestParam int year) {
-        List<AttendanceResponse> history = attendanceService.getMyAttendanceHistory(month, year);
+            @RequestParam int year,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<AttendanceResponse> history =
+                attendanceService.getMyAttendanceHistory(month, year, pageable);
         return ResponseEntity.ok(ApiResponse.success(history, "Attendance history retrieved successfully"));
     }
 
