@@ -242,6 +242,12 @@ public class LeaveService {
                 .orElseThrow(() -> new ResourceNotFoundException("Leave request not found"));
         ensureSameCompany(leaveRequest.getUser(), companyId);
 
+        if (leaveRequest.getUser().getId().equals(actionerId)) {
+            throw new BadRequestException(
+                    "You cannot approve or reject your own leave request. "
+                            + "Please ask another HR or Admin to action it.");
+        }
+
         if (leaveRequest.getStatus() != LeaveRequestStatus.PENDING) {
             throw new BadRequestException("Leave is not pending");
         }
