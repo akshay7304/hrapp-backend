@@ -120,6 +120,11 @@ public class AttendanceService {
                 .build();
         attendancePunchRepository.save(punch);
 
+        if (!firstPunchOfDay) {
+            attendance.setStatus(AttendanceStatus.PRESENT);
+            attendance = attendanceRepository.save(attendance);
+        }
+
         log.info("Check-in user={} date={} punchId={}", userId, today, punch.getId());
         return toResponse(attendance);
     }
