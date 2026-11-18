@@ -30,7 +30,7 @@ public class LeaveTypeController {
     private final LeaveTypeService leaveTypeService;
 
     @PostMapping("/company/{companyId}")
-    @PreAuthorize("hasRole('SUPERADMIN')")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN')")
     public ResponseEntity<ApiResponse<LeaveTypeResponse>> createLeaveType(
             @PathVariable Long companyId,
             @Valid @RequestBody LeaveTypeRequest request) {
@@ -48,7 +48,7 @@ public class LeaveTypeController {
     }
 
     @PutMapping("/company/{companyId}/{id}")
-    @PreAuthorize("hasRole('SUPERADMIN')")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN')")
     public ResponseEntity<ApiResponse<LeaveTypeResponse>> updateLeaveType(
             @PathVariable Long companyId,
             @PathVariable Long id,
@@ -58,7 +58,7 @@ public class LeaveTypeController {
     }
 
     @DeleteMapping("/company/{companyId}/{id}")
-    @PreAuthorize("hasRole('SUPERADMIN')")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deleteLeaveType(
             @PathVariable Long companyId,
             @PathVariable Long id) {

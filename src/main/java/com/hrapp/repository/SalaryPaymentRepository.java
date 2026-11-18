@@ -1,6 +1,7 @@
 package com.hrapp.repository;
 
 import com.hrapp.entity.SalaryPayment;
+import com.hrapp.enums.PaymentStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
@@ -56,4 +57,11 @@ public interface SalaryPaymentRepository extends JpaRepository<SalaryPayment, Lo
             Long companyId, Integer month, Integer year, Pageable pageable);
 
     boolean existsByUserIdAndMonthAndYear(Long userId, Integer month, Integer year);
+
+    /** Payslips generated for a company month — ops dashboard payroll progress. */
+    long countByUser_CompanyIdAndMonthAndYear(Long companyId, Integer month, Integer year);
+
+    /** Payslips in a given payment status for a company month. */
+    long countByUser_CompanyIdAndMonthAndYearAndStatus(
+            Long companyId, Integer month, Integer year, PaymentStatus status);
 }

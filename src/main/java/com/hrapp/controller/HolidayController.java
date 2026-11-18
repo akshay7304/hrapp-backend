@@ -30,7 +30,7 @@ public class HolidayController {
     private final HolidayService holidayService;
 
     @PostMapping("/company/{companyId}")
-    @PreAuthorize("hasRole('SUPERADMIN')")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN')")
     public ResponseEntity<ApiResponse<HolidayResponse>> createHoliday(
             @PathVariable Long companyId,
             @Valid @RequestBody HolidayRequest request) {
@@ -48,7 +48,7 @@ public class HolidayController {
     }
 
     @PutMapping("/company/{companyId}/{id}")
-    @PreAuthorize("hasRole('SUPERADMIN')")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN')")
     public ResponseEntity<ApiResponse<HolidayResponse>> updateHoliday(
             @PathVariable Long companyId,
             @PathVariable Long id,
@@ -58,7 +58,7 @@ public class HolidayController {
     }
 
     @DeleteMapping("/company/{companyId}/{id}")
-    @PreAuthorize("hasRole('SUPERADMIN')")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deleteHoliday(
             @PathVariable Long companyId,
             @PathVariable Long id) {

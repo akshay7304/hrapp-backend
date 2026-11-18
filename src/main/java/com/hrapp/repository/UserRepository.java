@@ -75,6 +75,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /** Total head-count for a company (any status). Used by the company report list. */
     long countByCompanyId(Long companyId);
 
+    /** Active head-count for ops dashboard (status.name typically {@code "Active"}). */
+    long countByCompanyIdAndStatus_Name(Long companyId, String statusName);
+
     /**
      * Resolves a biometric-device-side employee id to a real user inside the
      * given company. Used by the thumb-scanner integration to translate a raw

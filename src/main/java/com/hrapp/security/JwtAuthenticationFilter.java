@@ -38,11 +38,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     /**
      * server.servlet.context-path is {@code /api/v1}, so the servlet path here
      * is the URL <em>after</em> that prefix (e.g. {@code /auth/login}).
+     * <p>
+     * Only public auth endpoints skip JWT parsing. Authenticated auth routes
+     * such as {@code /auth/change-password} must still run through this filter.
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
-        return path.startsWith("/auth/")
+        return path.equals("/health")
+                || path.equals("/auth/login")
+                || path.equals("/auth/refresh-token")
                 || path.startsWith("/swagger-ui")
                 || path.startsWith("/v3/api-docs");
     }

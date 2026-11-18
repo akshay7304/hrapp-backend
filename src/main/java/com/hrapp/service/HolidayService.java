@@ -18,10 +18,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 /**
- * Holiday CRUD. Writes are restricted to SUPERADMIN at the controller layer,
- * so the {@code companyId} arg here is always trusted on writes. Reads accept
- * any authenticated user and silently scope to the caller's own company when
- * the caller is not SUPERADMIN — preventing cross-tenant data leaks.
+ * Holiday CRUD. SUPERADMIN can manage any company; ADMIN is locked to their
+ * own company regardless of the path {@code companyId}. Reads are open to any
+ * authenticated user but similarly scoped for non-SUPERADMIN callers.
  */
 @Service
 @RequiredArgsConstructor
@@ -35,11 +34,13 @@ public class HolidayService {
 
     @Transactional
     public HolidayResponse createHoliday(Long companyId, HolidayRequest request) {
-        if (holidayRepository.existsByCompanyIdAndHolidayDate(companyId, request.getHolidayDate())) {
+        Long effectiveCompanyId = resolveCompanyId(companyId);
+
+        if (holidayRepository.existsByCompanyIdAndHolidayDate(effectiveCompanyId, request.getHolidayDate())) {
             throw new ConflictException("A holiday already exists on this date");
         }
 
-        Company company = companyRepository.findById(companyId)
+        Company company = companyRepository.findById(effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
 
         Holiday holiday = Holiday.builder()
@@ -49,13 +50,14 @@ public class HolidayService {
                 .build();
         holiday = holidayRepository.save(holiday);
 
-        log.info("Created holiday id={} date={} in company={}", holiday.getId(), holiday.getHolidayDate(), companyId);
+        log.info("Created holiday id={} date={} in company={}",
+                holiday.getId(), holiday.getHolidayDate(), effectiveCompanyId);
         return toResponse(holiday);
     }
 
     @Transactional(readOnly = true)
     public List<HolidayResponse> getHolidays(Long companyId) {
-        Long effectiveCompanyId = resolveReadCompanyId(companyId);
+        Long effectiveCompanyId = resolveCompanyId(companyId);
         return holidayRepository.findByCompanyIdOrderByHolidayDateAsc(effectiveCompanyId).stream()
                 .map(this::toResponse)
                 .toList();
@@ -63,11 +65,13 @@ public class HolidayService {
 
     @Transactional
     public HolidayResponse updateHoliday(Long companyId, Long id, HolidayRequest request) {
-        Holiday holiday = holidayRepository.findByIdAndCompanyId(id, companyId)
+        Long effectiveCompanyId = resolveCompanyId(companyId);
+
+        Holiday holiday = holidayRepository.findByIdAndCompanyId(id, effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Holiday not found"));
 
         if (!holiday.getHolidayDate().equals(request.getHolidayDate())
-                && holidayRepository.existsByCompanyIdAndHolidayDate(companyId, request.getHolidayDate())) {
+                && holidayRepository.existsByCompanyIdAndHolidayDate(effectiveCompanyId, request.getHolidayDate())) {
             throw new ConflictException("A holiday already exists on this date");
         }
 
@@ -81,17 +85,19 @@ public class HolidayService {
 
     @Transactional
     public void deleteHoliday(Long companyId, Long id) {
-        Holiday holiday = holidayRepository.findByIdAndCompanyId(id, companyId)
+        Long effectiveCompanyId = resolveCompanyId(companyId);
+
+        Holiday holiday = holidayRepository.findByIdAndCompanyId(id, effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Holiday not found"));
         holidayRepository.delete(holiday);
         log.info("Deleted holiday id={}", id);
     }
 
     /**
-     * SUPERADMIN can read any company's holidays; everyone else is locked to
+     * SUPERADMIN can target any company by id; everyone else is locked to
      * their own company regardless of what they pass in the path.
      */
-    private Long resolveReadCompanyId(Long pathCompanyId) {
+    private Long resolveCompanyId(Long pathCompanyId) {
         if (SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
             if (pathCompanyId == null) {
                 throw new ResourceNotFoundException("Company not found");

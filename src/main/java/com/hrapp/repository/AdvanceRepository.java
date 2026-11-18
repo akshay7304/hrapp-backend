@@ -47,6 +47,8 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
             @Param("userId") Long userId,
             @Param("status") AdvanceStatus status);
 
+    long countByUserIdAndStatus(Long userId, AdvanceStatus status);
+
     /** Admin/HR pending queue — oldest first so first-come-first-served. */
     @Query("SELECT a FROM Advance a " +
             "JOIN FETCH a.user u " +
@@ -61,6 +63,9 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
     @EntityGraph(attributePaths = {"user", "approvedBy"})
     Page<Advance> findByUser_CompanyIdAndStatus(
             Long companyId, AdvanceStatus status, Pageable pageable);
+
+    /** Pending-queue size for the ops dashboard badge. */
+    long countByUser_CompanyIdAndStatus(Long companyId, AdvanceStatus status);
 
     /** Full company history — newest first. */
     @Query("SELECT a FROM Advance a " +

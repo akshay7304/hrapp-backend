@@ -25,6 +25,8 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
             @Param("userId") Long userId,
             @Param("status") LeaveRequestStatus status);
 
+    long countByUserIdAndStatus(Long userId, LeaveRequestStatus status);
+
     @Query("SELECT lr FROM LeaveRequest lr " +
             "JOIN FETCH lr.user " +
             "JOIN FETCH lr.leaveType " +
@@ -58,6 +60,9 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
     @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
     Page<LeaveRequest> findByUser_CompanyIdAndStatus(
             Long companyId, LeaveRequestStatus status, Pageable pageable);
+
+    /** Pending-queue size for the ops dashboard badge. */
+    long countByUser_CompanyIdAndStatus(Long companyId, LeaveRequestStatus status);
 
     @Query("SELECT lr FROM LeaveRequest lr " +
             "JOIN FETCH lr.user u " +

@@ -20,4 +20,7 @@ public interface HolidayRepository extends JpaRepository<Holiday, Long> {
     boolean existsByCompanyIdAndHolidayDate(Long companyId, LocalDate holidayDate);
 
     List<Holiday> findByCompanyIdAndHolidayDateBetween(Long companyId, LocalDate from, LocalDate to);
+
+    Optional<Holiday> findFirstByCompanyIdAndHolidayDateGreaterThanEqualOrderByHolidayDateAsc(
+            Long companyId, LocalDate fromDateInclusive);
 }

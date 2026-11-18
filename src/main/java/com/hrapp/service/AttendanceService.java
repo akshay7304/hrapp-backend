@@ -232,11 +232,16 @@ public class AttendanceService {
 
     @Transactional(readOnly = true)
     public AttendanceResponse getTodayAttendance() {
+        return findTodayAttendanceOptional()
+                .orElseThrow(() -> new ResourceNotFoundException("No attendance recorded for today"));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<AttendanceResponse> findTodayAttendanceOptional() {
         Long userId = requireCallerUserId();
         LocalDate today = LocalDate.now();
-        Attendance attendance = attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
-                .orElseThrow(() -> new ResourceNotFoundException("No attendance recorded for today"));
-        return toResponse(attendance);
+        return attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
+                .map(this::toResponse);
     }
 
     @Transactional(readOnly = true)

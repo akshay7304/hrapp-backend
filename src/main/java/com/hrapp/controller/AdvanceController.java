@@ -78,7 +78,7 @@ public class AdvanceController {
     }
 
     @PutMapping("/{id}/action")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR')")
     public ResponseEntity<ApiResponse<AdvanceResponse>> actionAdvance(
             @PathVariable("id") Long id,
             @Valid @RequestBody ActionAdvanceRequest request) {

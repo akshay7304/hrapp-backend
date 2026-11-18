@@ -142,6 +142,12 @@ public class AdvanceService {
                 .orElseThrow(() -> new ResourceNotFoundException("Advance not found"));
         ensureSameCompany(advance.getUser(), companyId);
 
+        if (advance.getUser().getId().equals(actionerId)) {
+            throw new BadRequestException(
+                    "You cannot approve or reject your own advance request. "
+                            + "Please ask another HR or Admin to action it.");
+        }
+
         if (advance.getStatus() != AdvanceStatus.PENDING) {
             throw new BadRequestException("Advance is not pending");
         }

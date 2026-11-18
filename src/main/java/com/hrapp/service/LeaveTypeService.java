@@ -18,9 +18,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 /**
- * Leave-type CRUD. Same pattern as {@code HolidayService}:
- * writes are SUPERADMIN-only; reads are open to any authenticated user but
- * scoped to the caller's company unless the caller is SUPERADMIN.
+ * Leave-type CRUD. SUPERADMIN can manage any company; ADMIN is locked to their
+ * own company regardless of the path {@code companyId}. Reads are open to any
+ * authenticated user but similarly scoped for non-SUPERADMIN callers.
  */
 @Service
 @RequiredArgsConstructor
@@ -34,11 +34,13 @@ public class LeaveTypeService {
 
     @Transactional
     public LeaveTypeResponse createLeaveType(Long companyId, LeaveTypeRequest request) {
-        if (leaveTypeRepository.existsByCompanyIdAndName(companyId, request.getName())) {
+        Long effectiveCompanyId = resolveCompanyId(companyId);
+
+        if (leaveTypeRepository.existsByCompanyIdAndName(effectiveCompanyId, request.getName())) {
             throw new ConflictException("Leave type with this name already exists");
         }
 
-        Company company = companyRepository.findById(companyId)
+        Company company = companyRepository.findById(effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
 
         LeaveType leaveType = LeaveType.builder()
@@ -49,13 +51,14 @@ public class LeaveTypeService {
                 .build();
         leaveType = leaveTypeRepository.save(leaveType);
 
-        log.info("Created leave type id={} name='{}' in company={}", leaveType.getId(), leaveType.getName(), companyId);
+        log.info("Created leave type id={} name='{}' in company={}",
+                leaveType.getId(), leaveType.getName(), effectiveCompanyId);
         return toResponse(leaveType);
     }
 
     @Transactional(readOnly = true)
     public List<LeaveTypeResponse> getLeaveTypes(Long companyId) {
-        Long effectiveCompanyId = resolveReadCompanyId(companyId);
+        Long effectiveCompanyId = resolveCompanyId(companyId);
         return leaveTypeRepository.findByCompanyId(effectiveCompanyId).stream()
                 .map(this::toResponse)
                 .toList();
@@ -63,11 +66,13 @@ public class LeaveTypeService {
 
     @Transactional
     public LeaveTypeResponse updateLeaveType(Long companyId, Long id, LeaveTypeRequest request) {
-        LeaveType leaveType = leaveTypeRepository.findByIdAndCompanyId(id, companyId)
+        Long effectiveCompanyId = resolveCompanyId(companyId);
+
+        LeaveType leaveType = leaveTypeRepository.findByIdAndCompanyId(id, effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Leave type not found"));
 
         if (!leaveType.getName().equalsIgnoreCase(request.getName())
-                && leaveTypeRepository.existsByCompanyIdAndName(companyId, request.getName())) {
+                && leaveTypeRepository.existsByCompanyIdAndName(effectiveCompanyId, request.getName())) {
             throw new ConflictException("Leave type with this name already exists");
         }
 
@@ -82,13 +87,15 @@ public class LeaveTypeService {
 
     @Transactional
     public void deleteLeaveType(Long companyId, Long id) {
-        LeaveType leaveType = leaveTypeRepository.findByIdAndCompanyId(id, companyId)
+        Long effectiveCompanyId = resolveCompanyId(companyId);
+
+        LeaveType leaveType = leaveTypeRepository.findByIdAndCompanyId(id, effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Leave type not found"));
         leaveTypeRepository.delete(leaveType);
         log.info("Deleted leave type id={}", id);
     }
 
-    private Long resolveReadCompanyId(Long pathCompanyId) {
+    private Long resolveCompanyId(Long pathCompanyId) {
         if (SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
             if (pathCompanyId == null) {
                 throw new ResourceNotFoundException("Company not found");
