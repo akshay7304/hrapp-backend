@@ -11,11 +11,10 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class OpsDashboardPayrollStatusResponse {
+public class HomeMeUserResponse {
 
-    private Integer month;
-    private Integer year;
-    private Long generated;
-    private Long paid;
-    private Long unpaid;
+    private Long userId;
+    private String fullName;
+    private String empCode;
+    private Long companyId;
 }

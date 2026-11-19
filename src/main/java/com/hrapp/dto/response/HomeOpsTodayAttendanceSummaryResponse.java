@@ -11,7 +11,7 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class OpsDashboardTodayAttendanceSummaryResponse {
+public class HomeOpsTodayAttendanceSummaryResponse {
 
     private Integer present;
     private Integer absent;

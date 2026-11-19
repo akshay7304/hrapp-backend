@@ -11,7 +11,7 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class EmployeeDashboardMonthSummaryResponse {
+public class HomeMeMonthSummaryResponse {
 
     private Integer month;
     private Integer year;

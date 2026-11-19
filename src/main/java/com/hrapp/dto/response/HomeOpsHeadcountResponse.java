@@ -11,7 +11,7 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class OpsDashboardHeadcountResponse {
+public class HomeOpsHeadcountResponse {
 
     private Long totalActiveEmployees;
 }

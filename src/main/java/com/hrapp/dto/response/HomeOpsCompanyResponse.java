@@ -11,10 +11,8 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class EmployeeDashboardUserResponse {
+public class HomeOpsCompanyResponse {
 
-    private Long userId;
-    private String fullName;
-    private String empCode;
     private Long companyId;
+    private String name;
 }

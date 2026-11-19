@@ -13,12 +13,12 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class EmployeeDashboardResponse {
+public class HomeMeResponse {
 
-    private EmployeeDashboardUserResponse user;
+    private HomeMeUserResponse user;
     private AttendanceResponse todayAttendance;
-    private EmployeeDashboardShiftResponse shift;
-    private EmployeeDashboardMonthSummaryResponse monthSummary;
+    private HomeMeShiftResponse shift;
+    private HomeMeMonthSummaryResponse monthSummary;
     private List<LeaveBalanceResponse> leaveBalances;
     private Long pendingLeavesCount;
     private Long pendingAdvancesCount;

@@ -1,17 +1,18 @@
 package com.hrapp.service;
 
 import com.hrapp.dto.response.AttendanceResponse;
-import com.hrapp.dto.response.EmployeeDashboardMonthSummaryResponse;
-import com.hrapp.dto.response.EmployeeDashboardResponse;
-import com.hrapp.dto.response.EmployeeDashboardShiftResponse;
-import com.hrapp.dto.response.EmployeeDashboardUserResponse;
 import com.hrapp.dto.response.HolidayResponse;
+import com.hrapp.dto.response.HomeMeMonthSummaryResponse;
+import com.hrapp.dto.response.HomeMeResponse;
+import com.hrapp.dto.response.HomeMeShiftResponse;
+import com.hrapp.dto.response.HomeMeUserResponse;
+import com.hrapp.dto.response.HomeOpsCompanyResponse;
+import com.hrapp.dto.response.HomeOpsHeadcountResponse;
+import com.hrapp.dto.response.HomeOpsPayrollStatusResponse;
+import com.hrapp.dto.response.HomeOpsResponse;
+import com.hrapp.dto.response.HomeOpsTodayAttendanceSummaryResponse;
+import com.hrapp.dto.response.HomeResponse;
 import com.hrapp.dto.response.LeaveBalanceResponse;
-import com.hrapp.dto.response.OpsDashboardCompanyResponse;
-import com.hrapp.dto.response.OpsDashboardHeadcountResponse;
-import com.hrapp.dto.response.OpsDashboardPayrollStatusResponse;
-import com.hrapp.dto.response.OpsDashboardResponse;
-import com.hrapp.dto.response.OpsDashboardTodayAttendanceSummaryResponse;
 import com.hrapp.entity.Attendance;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.Holiday;
@@ -43,14 +44,19 @@ import java.time.YearMonth;
 import java.util.List;
 
 /**
- * Aggregates home-screen data for employee and ops dashboards.
+ * Single home-screen aggregate. Role comes from the JWT; EMPLOYEE gets {@code me}
+ * only, ADMIN/HR also get {@code ops}.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class DashboardService {
+public class HomeService {
 
     private static final String STATUS_ACTIVE = "Active";
+    private static final String ROLE_SUPERADMIN = "SUPERADMIN";
+    private static final String ROLE_ADMIN = "ADMIN";
+    private static final String ROLE_HR = "HR";
+    private static final String ROLE_EMPLOYEE = "EMPLOYEE";
 
     private final UserRepository userRepository;
     private final CompanyRepository companyRepository;
@@ -65,10 +71,35 @@ public class DashboardService {
     private final SalaryPaymentRepository salaryPaymentRepository;
 
     @Transactional(readOnly = true)
-    public EmployeeDashboardResponse getEmployeeDashboard() {
-        Long userId = requireCallerUserId();
-        Long companyId = requireCallerCompanyId();
+    public HomeResponse getHome() {
+        String role = resolvePrimaryRole();
+        Long companyId = SecurityUtil.getCurrentUserCompanyId();
 
+        if (ROLE_SUPERADMIN.equals(role) && companyId == null) {
+            return HomeResponse.builder()
+                    .role(role)
+                    .me(null)
+                    .ops(null)
+                    .build();
+        }
+
+        Long effectiveCompanyId = requireCallerCompanyId();
+        HomeMeResponse me = buildMe(effectiveCompanyId);
+        HomeOpsResponse ops = null;
+        if (SecurityUtil.hasRole(ROLE_ADMIN) || SecurityUtil.hasRole(ROLE_HR)
+                || SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
+            ops = buildOps(effectiveCompanyId);
+        }
+
+        return HomeResponse.builder()
+                .role(role)
+                .me(me)
+                .ops(ops)
+                .build();
+    }
+
+    private HomeMeResponse buildMe(Long companyId) {
+        Long userId = requireCallerUserId();
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
@@ -77,8 +108,8 @@ public class DashboardService {
         int year = today.getYear();
 
         AttendanceResponse todayAttendance = attendanceService.findTodayAttendanceOptional().orElse(null);
-        EmployeeDashboardShiftResponse shift = buildShift(companyId);
-        EmployeeDashboardMonthSummaryResponse monthSummary = buildMonthSummary(userId, currentMonth);
+        HomeMeShiftResponse shift = buildShift(companyId);
+        HomeMeMonthSummaryResponse monthSummary = buildMonthSummary(userId, currentMonth);
         List<LeaveBalanceResponse> leaveBalances = leaveService.getMyLeaveBalances(year);
         long pendingLeavesCount = leaveRequestRepository.countByUserIdAndStatus(
                 userId, LeaveRequestStatus.PENDING);
@@ -89,8 +120,8 @@ public class DashboardService {
                 .map(this::toHolidayResponse)
                 .orElse(null);
 
-        return EmployeeDashboardResponse.builder()
-                .user(EmployeeDashboardUserResponse.builder()
+        return HomeMeResponse.builder()
+                .user(HomeMeUserResponse.builder()
                         .userId(user.getId())
                         .fullName(user.getFullName())
                         .empCode(user.getEmpCode())
@@ -106,13 +137,7 @@ public class DashboardService {
                 .build();
     }
 
-    /**
-     * HR/ADMIN company home-screen aggregate: approval badges, today's
-     * attendance pulse, headcount, thumb backlog, and this-month payroll.
-     */
-    @Transactional(readOnly = true)
-    public OpsDashboardResponse getOpsDashboard() {
-        Long companyId = requireCallerCompanyId();
+    private HomeOpsResponse buildOps(Long companyId) {
         Company company = companyRepository.findById(companyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
 
@@ -127,28 +152,23 @@ public class DashboardService {
                 companyId, AdvanceStatus.PENDING);
         long pendingThumbLogsCount = thumbLogRepository.countByCompanyIdAndIsProcessedFalse(companyId);
 
-        OpsDashboardTodayAttendanceSummaryResponse todaySummary =
-                buildTodayAttendanceSummary(companyId, today, totalActiveEmployees);
-        OpsDashboardPayrollStatusResponse payrollStatus =
-                buildThisMonthPayrollStatus(companyId, currentMonth);
-
-        return OpsDashboardResponse.builder()
-                .company(OpsDashboardCompanyResponse.builder()
+        return HomeOpsResponse.builder()
+                .company(HomeOpsCompanyResponse.builder()
                         .companyId(company.getId())
                         .name(company.getName())
                         .build())
-                .headcount(OpsDashboardHeadcountResponse.builder()
+                .headcount(HomeOpsHeadcountResponse.builder()
                         .totalActiveEmployees(totalActiveEmployees)
                         .build())
                 .pendingLeavesCount(pendingLeavesCount)
                 .pendingAdvancesCount(pendingAdvancesCount)
                 .pendingThumbLogsCount(pendingThumbLogsCount)
-                .todayAttendanceSummary(todaySummary)
-                .thisMonthPayrollStatus(payrollStatus)
+                .todayAttendanceSummary(buildTodayAttendanceSummary(companyId, today, totalActiveEmployees))
+                .thisMonthPayrollStatus(buildThisMonthPayrollStatus(companyId, currentMonth))
                 .build();
     }
 
-    private OpsDashboardTodayAttendanceSummaryResponse buildTodayAttendanceSummary(
+    private HomeOpsTodayAttendanceSummaryResponse buildTodayAttendanceSummary(
             Long companyId, LocalDate today, long totalActiveEmployees) {
         List<Attendance> rows = attendanceRepository.findByCompanyIdAndAttendanceDate(companyId, today);
 
@@ -183,7 +203,7 @@ public class DashboardService {
 
         int notCheckedIn = (int) Math.max(0, totalActiveEmployees - checkedInToday);
 
-        return OpsDashboardTodayAttendanceSummaryResponse.builder()
+        return HomeOpsTodayAttendanceSummaryResponse.builder()
                 .present(present)
                 .absent(absent)
                 .halfDay(halfDay)
@@ -195,7 +215,7 @@ public class DashboardService {
                 .build();
     }
 
-    private OpsDashboardPayrollStatusResponse buildThisMonthPayrollStatus(
+    private HomeOpsPayrollStatusResponse buildThisMonthPayrollStatus(
             Long companyId, YearMonth month) {
         int monthValue = month.getMonthValue();
         int year = month.getYear();
@@ -206,7 +226,7 @@ public class DashboardService {
         long unpaid = salaryPaymentRepository.countByUser_CompanyIdAndMonthAndYearAndStatus(
                 companyId, monthValue, year, PaymentStatus.DRAFT);
 
-        return OpsDashboardPayrollStatusResponse.builder()
+        return HomeOpsPayrollStatusResponse.builder()
                 .month(monthValue)
                 .year(year)
                 .generated(generated)
@@ -215,16 +235,16 @@ public class DashboardService {
                 .build();
     }
 
-    private EmployeeDashboardShiftResponse buildShift(Long companyId) {
+    private HomeMeShiftResponse buildShift(Long companyId) {
         return companySettingsRepository.findByCompanyId(companyId)
-                .map(settings -> EmployeeDashboardShiftResponse.builder()
+                .map(settings -> HomeMeShiftResponse.builder()
                         .shiftStartTime(settings.getShiftStartTime())
                         .shiftEndTime(settings.getShiftEndTime())
                         .build())
                 .orElse(null);
     }
 
-    private EmployeeDashboardMonthSummaryResponse buildMonthSummary(Long userId, YearMonth month) {
+    private HomeMeMonthSummaryResponse buildMonthSummary(Long userId, YearMonth month) {
         List<Attendance> rows = attendanceRepository.findByUserIdAndAttendanceDateBetween(
                 userId, month.atDay(1), month.atEndOfMonth());
 
@@ -250,7 +270,7 @@ public class DashboardService {
             }
         }
 
-        return EmployeeDashboardMonthSummaryResponse.builder()
+        return HomeMeMonthSummaryResponse.builder()
                 .month(month.getMonthValue())
                 .year(month.getYear())
                 .presentDays(present)
@@ -270,6 +290,26 @@ public class DashboardService {
                 .companyId(holiday.getCompany() != null ? holiday.getCompany().getId() : null)
                 .createdAt(holiday.getCreatedAt())
                 .build();
+    }
+
+    private String resolvePrimaryRole() {
+        if (SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
+            return ROLE_SUPERADMIN;
+        }
+        if (SecurityUtil.hasRole(ROLE_ADMIN)) {
+            return ROLE_ADMIN;
+        }
+        if (SecurityUtil.hasRole(ROLE_HR)) {
+            return ROLE_HR;
+        }
+        if (SecurityUtil.hasRole(ROLE_EMPLOYEE)) {
+            return ROLE_EMPLOYEE;
+        }
+        List<String> roles = SecurityUtil.getCurrentUserRoles();
+        if (roles.isEmpty()) {
+            throw new UnauthorizedException("Not authenticated");
+        }
+        return roles.get(0);
     }
 
     private Long requireCallerUserId() {

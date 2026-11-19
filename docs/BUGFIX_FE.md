@@ -44,12 +44,11 @@ Base path: `/api/v1`. Status as of Nov 2026.
 | **8.2** | Delete leave type orphans | Delete with balances → **409**. | Show message; don’t delete if balances exist. |
 | **8.3** | Quota change vs balances | Updating `annualQuota` does **not** rewrite existing balances (new hires / future init only). | Don’t expect old balances to change after quota edit. |
 
-## Dashboards (already shipped)
+## Home (single API)
 
 | API | FE action |
 |-----|-----------|
-| `GET /dashboard/employee` | Employee home widgets. |
-| `GET /dashboard/ops` | ADMIN/HR pending counts + today summary (incl. thumb pending count). |
+| `GET /home` | One call for all roles. Use `role` from response. Always read `me` (check-in, shift, my pending). Read `ops` when non-null (ADMIN/HR company widgets). Old `/dashboard/employee` and `/dashboard/ops` removed. |
 
 ## P0 security (fixed — rebuild)
 

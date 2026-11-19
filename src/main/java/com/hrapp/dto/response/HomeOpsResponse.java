@@ -11,13 +11,13 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class OpsDashboardResponse {
+public class HomeOpsResponse {
 
-    private OpsDashboardCompanyResponse company;
-    private OpsDashboardHeadcountResponse headcount;
+    private HomeOpsCompanyResponse company;
+    private HomeOpsHeadcountResponse headcount;
     private Long pendingLeavesCount;
     private Long pendingAdvancesCount;
     private Long pendingThumbLogsCount;
-    private OpsDashboardTodayAttendanceSummaryResponse todayAttendanceSummary;
-    private OpsDashboardPayrollStatusResponse thisMonthPayrollStatus;
+    private HomeOpsTodayAttendanceSummaryResponse todayAttendanceSummary;
+    private HomeOpsPayrollStatusResponse thisMonthPayrollStatus;
 }
