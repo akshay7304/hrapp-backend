@@ -41,5 +41,14 @@ public class EmployeeResponse {
     /** Profile photo URL when set; {@code null} if the employee has no photo. */
     private String avatar;
 
+    /** Biometric enrol id when set. */
+    private String thumbDeviceId;
+
+    /**
+     * One-time temporary password returned only on create.
+     * FE must show it once; never returned on subsequent GETs.
+     */
+    private String temporaryPassword;
+
     private LocalDateTime createdAt;
 }

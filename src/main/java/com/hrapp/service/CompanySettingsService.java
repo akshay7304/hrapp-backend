@@ -10,6 +10,7 @@ import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.repository.CompanyRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.enums.LeaveCountType;
 import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -57,6 +59,11 @@ public class CompanySettingsService {
         settings.setOvertimeAfterHours(request.getOvertimeAfterHours());
         settings.setLateMarkAfterMinutes(request.getLateMarkAfterMinutes());
         settings.setWeekOffDay(resolveWeekOffStorage(request));
+        if (request.getLeaveCountType() != null && !request.getLeaveCountType().isBlank()) {
+            settings.setLeaveCountType(resolveLeaveCountType(request.getLeaveCountType()));
+        } else if (settings.getLeaveCountType() == null || settings.getLeaveCountType().isBlank()) {
+            settings.setLeaveCountType(LeaveCountType.EXCLUDE_WEEK_OFF_AND_HOLIDAYS.name());
+        }
 
         if (request.getDeviceBrand() != null && !request.getDeviceBrand().isBlank()) {
             settings.setDeviceBrand(request.getDeviceBrand().trim());
@@ -133,11 +140,21 @@ public class CompanySettingsService {
                 .lateMarkAfterMinutes(settings.getLateMarkAfterMinutes())
                 .weekOffDays(WeekOffSupport.toApiList(settings.getWeekOffDay()))
                 .weekOffDay(firstWeekOff(settings.getWeekOffDay()))
+                .leaveCountType(settings.getLeaveCountType())
                 .deviceBrand(settings.getDeviceBrand())
                 .deviceSerial(settings.getDeviceSerial())
                 .deviceSecretConfigured(secret != null && !secret.isBlank())
                 .updatedAt(settings.getUpdatedAt())
                 .build();
+    }
+
+    private static String resolveLeaveCountType(String raw) {
+        try {
+            return LeaveCountType.valueOf(raw.trim().toUpperCase(Locale.ROOT)).name();
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestException(
+                    "Invalid leaveCountType. Use EXCLUDE_WEEK_OFF_AND_HOLIDAYS, EXCLUDE_WEEK_OFF, or CALENDAR_DAYS");
+        }
     }
 
     private static String firstWeekOff(String stored) {

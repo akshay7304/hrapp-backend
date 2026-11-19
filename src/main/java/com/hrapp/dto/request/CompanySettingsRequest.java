@@ -53,6 +53,12 @@ public class CompanySettingsRequest {
      */
     private String weekOffDay;
 
+    /**
+     * Optional leave-day counting mode:
+     * {@code EXCLUDE_WEEK_OFF_AND_HOLIDAYS}, {@code EXCLUDE_WEEK_OFF}, {@code CALENDAR_DAYS}.
+     */
+    private String leaveCountType;
+
     /** Optional — manufacturer/protocol hint for the biometric device. */
     private String deviceBrand;
 

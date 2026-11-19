@@ -60,10 +60,22 @@ Base path: `/api/v1`. Status as of Nov 2026.
 | `deviceSerial` | Optional biometric SN for routing (not employee enrol id) |
 | Create roles | ADMIN → EMPLOYEE/HR only; HR → EMPLOYEE only; ADMIN via `/companies/{id}/admins` |
 
+## P1 (fixed — rebuild for Flyway V4)
+
+| Item | FE action |
+|------|-----------|
+| Advances pending | Own advances **excluded** (same as leave). |
+| Inactive company | Login/refresh blocked. |
+| `leaveCountType` | On settings GET/PUT (`EXCLUDE_WEEK_OFF_AND_HOLIDAYS` / `EXCLUDE_WEEK_OFF` / `CALENDAR_DAYS`). |
+| Dept/desig delete | **409** if employees assigned. |
+| Create password | Response includes one-time `temporaryPassword` — show once (not mobile). |
+| Avatar / enrol | `PUT /employees/{id}` accepts `profilePicUrl`, `thumbDeviceId`, `roleId` (EMPLOYEE/HR). |
+| Leave cancel | Status becomes **`CANCELLED`** (not REJECTED). |
+| Token revoke | Password change / terminate-like status invalidates existing access tokens (same JVM). |
+
 ## Remaining gaps
 
-| Sev | Item | FE until BE fixes |
-|-----|------|-------------------|
-| P1 | `/advances/pending` includes self | Hide approve on own rows |
-| P1 | No avatar upload | `avatar` null → initials |
-| P1 | Default password = mobile | Force change-password on first login |
+| Sev | Item | FE note |
+|-----|------|---------|
+| P2 | Company founder password still mobile | Only SUPERADMIN company create |
+| P2 | No multipart photo upload | Set `profilePicUrl` after FE/CDN upload |

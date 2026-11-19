@@ -9,6 +9,7 @@ import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.repository.CompanyRepository;
 import com.hrapp.repository.DepartmentRepository;
+import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +26,7 @@ public class DepartmentService {
 
     private final DepartmentRepository departmentRepository;
     private final CompanyRepository companyRepository;
+    private final UserRepository userRepository;
 
     @Transactional
     public DepartmentResponse createDepartment(DepartmentRequest request) {
@@ -79,6 +82,13 @@ public class DepartmentService {
 
         Department department = departmentRepository.findByIdAndCompanyId(id, companyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Department not found"));
+
+        long inUse = userRepository.countByDepartmentId(id);
+        if (inUse > 0) {
+            throw new ConflictException(
+                    "Cannot delete department: " + inUse + " employee(s) are assigned to it",
+                    Map.of("departmentId", "Reassign employees before deleting"));
+        }
 
         departmentRepository.delete(department);
         log.info("Deleted department id={}", id);

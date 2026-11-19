@@ -24,6 +24,7 @@ import com.hrapp.repository.UserRepository;
 import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.repository.UserStatusRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.security.TokenRevocationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -32,10 +33,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -56,10 +60,11 @@ public class EmployeeService {
     private static final String ROLE_ADMIN = "ADMIN";
     private static final String ROLE_HR = "HR";
     private static final String ROLE_EMPLOYEE = "EMPLOYEE";
-    private static final java.util.Set<String> ADMIN_CREATABLE_ROLES =
-            java.util.Set.of(ROLE_EMPLOYEE, ROLE_HR);
-    private static final java.util.Set<String> HR_CREATABLE_ROLES =
-            java.util.Set.of(ROLE_EMPLOYEE);
+    private static final Set<String> ADMIN_CREATABLE_ROLES = Set.of(ROLE_EMPLOYEE, ROLE_HR);
+    private static final Set<String> HR_CREATABLE_ROLES = Set.of(ROLE_EMPLOYEE);
+    private static final Set<String> TOKEN_REVOKE_STATUSES =
+            Set.of("terminated", "resigned", "suspended", "inactive");
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
@@ -70,6 +75,7 @@ public class EmployeeService {
     private final CompanyRepository companyRepository;
     private final PasswordEncoder passwordEncoder;
     private final LeaveService leaveService;
+    private final TokenRevocationService tokenRevocationService;
 
     @Transactional
     public EmployeeResponse createEmployee(CreateEmployeeRequest request) {
@@ -100,6 +106,7 @@ public class EmployeeService {
         Company company = companyRepository.findByIdAndIsActive(companyId, true)
                 .orElseThrow(() -> new BadRequestException("Company is inactive or does not exist"));
 
+        String temporaryPassword = generateTemporaryPassword();
         User user = User.builder()
                 .company(company)
                 .department(department)
@@ -109,9 +116,10 @@ public class EmployeeService {
                 .fullName(request.getFullName())
                 .mobile(request.getMobile())
                 .email(request.getEmail())
-                .passwordHash(passwordEncoder.encode(request.getMobile()))
+                .passwordHash(passwordEncoder.encode(temporaryPassword))
                 .salaryType(request.getSalaryType())
                 .joiningDate(request.getJoiningDate())
+                .thumbDeviceId(blankToNull(request.getThumbDeviceId()))
                 .build();
         user = userRepository.save(user);
 
@@ -128,7 +136,7 @@ public class EmployeeService {
         leaveService.initializeLeaveBalancesForEmployee(user);
 
         log.info("Created employee id={} empCode={} in company={}", user.getId(), user.getEmpCode(), companyId);
-        return toResponse(user, List.of(role.getName()));
+        return toResponse(user, List.of(role.getName()), temporaryPassword);
     }
 
     @Transactional(readOnly = true)
@@ -139,7 +147,7 @@ public class EmployeeService {
         Page<User> users = userRepository.searchByCompany(
                 companyId, departmentId, statusId, trimmedSearch, pageable);
         if (users.isEmpty()) {
-            return PageResponse.from(users.map(u -> toResponse(u, Collections.emptyList())));
+            return PageResponse.from(users.map(u -> toResponse(u, Collections.emptyList(), null)));
         }
 
         // Fetch roles only for the users on this page — keeps the join
@@ -152,7 +160,7 @@ public class EmployeeService {
                 ));
 
         return PageResponse.from(users.map(u ->
-                toResponse(u, rolesByUser.getOrDefault(u.getId(), Collections.emptyList()))));
+                toResponse(u, rolesByUser.getOrDefault(u.getId(), Collections.emptyList()), null)));
     }
 
     @Transactional(readOnly = true)
@@ -160,7 +168,7 @@ public class EmployeeService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
         ensureSameCompanyOrSuperadmin(user);
-        return toResponse(user, fetchRoleNames(user.getId()));
+        return toResponse(user, fetchRoleNames(user.getId()), null);
     }
 
     @Transactional
@@ -201,10 +209,23 @@ public class EmployeeService {
         if (request.getJoiningDate() != null) {
             user.setJoiningDate(request.getJoiningDate());
         }
+        if (request.getThumbDeviceId() != null) {
+            user.setThumbDeviceId(blankToNull(request.getThumbDeviceId()));
+        }
+        if (request.getProfilePicUrl() != null) {
+            user.setProfilePicUrl(blankToNull(request.getProfilePicUrl()));
+        }
+        if (request.getRoleId() != null) {
+            Role role = roleRepository.findById(request.getRoleId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Role not found"));
+            ensureCreatableRole(role);
+            userRoleRepository.deleteByUser_Id(user.getId());
+            userRoleRepository.save(UserRole.builder().user(user).role(role).build());
+        }
 
         user = userRepository.save(user);
         log.info("Updated employee id={}", user.getId());
-        return toResponse(user, fetchRoleNames(user.getId()));
+        return toResponse(user, fetchRoleNames(user.getId()), null);
     }
 
     @Transactional
@@ -218,8 +239,13 @@ public class EmployeeService {
         user.setStatus(status);
         user = userRepository.save(user);
 
+        if (status.getName() != null
+                && TOKEN_REVOKE_STATUSES.contains(status.getName().trim().toLowerCase(Locale.ROOT))) {
+            tokenRevocationService.revokeAllForUser(user.getId());
+        }
+
         log.info("Updated employee id={} status to {}", user.getId(), status.getName());
-        return toResponse(user, fetchRoleNames(user.getId()));
+        return toResponse(user, fetchRoleNames(user.getId()), null);
     }
 
     @Transactional(readOnly = true)
@@ -230,7 +256,7 @@ public class EmployeeService {
         }
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Profile not found"));
-        return toResponse(user, fetchRoleNames(user.getId()));
+        return toResponse(user, fetchRoleNames(user.getId()), null);
     }
 
     /**
@@ -306,11 +332,7 @@ public class EmployeeService {
         throw new ConflictException("Unable to allocate a unique employee code");
     }
 
-    private EmployeeResponse toResponse(User user, List<String> roles) {
-        String avatar = user.getProfilePicUrl();
-        if (avatar != null && avatar.isBlank()) {
-            avatar = null;
-        }
+    private EmployeeResponse toResponse(User user, List<String> roles, String temporaryPassword) {
         return EmployeeResponse.builder()
                 .id(user.getId())
                 .empCode(user.getEmpCode())
@@ -327,8 +349,26 @@ public class EmployeeService {
                 .statusName(user.getStatus() != null ? user.getStatus().getName() : null)
                 .companyId(user.getCompany() != null ? user.getCompany().getId() : null)
                 .roles(roles != null ? roles : new ArrayList<>())
-                .avatar(avatar)
+                .avatar(blankToNull(user.getProfilePicUrl()))
+                .thumbDeviceId(user.getThumbDeviceId())
+                .temporaryPassword(temporaryPassword)
                 .createdAt(user.getCreatedAt())
                 .build();
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private static String generateTemporaryPassword() {
+        final String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        StringBuilder sb = new StringBuilder(10);
+        for (int i = 0; i < 10; i++) {
+            sb.append(alphabet.charAt(SECURE_RANDOM.nextInt(alphabet.length())));
+        }
+        return sb.toString();
     }
 }

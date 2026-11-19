@@ -115,6 +115,11 @@ public class JwtUtil {
         return TYPE_REFRESH.equals(value);
     }
 
+    public java.time.Instant extractIssuedAt(String token) {
+        Date issuedAt = parseClaims(token).getIssuedAt();
+        return issuedAt == null ? null : issuedAt.toInstant();
+    }
+
     public boolean validateToken(String token) {
         try {
             parseClaims(token);

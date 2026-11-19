@@ -9,6 +9,7 @@ import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.repository.CompanyRepository;
 import com.hrapp.repository.DesignationRepository;
+import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +26,7 @@ public class DesignationService {
 
     private final DesignationRepository designationRepository;
     private final CompanyRepository companyRepository;
+    private final UserRepository userRepository;
 
     @Transactional
     public DesignationResponse createDesignation(DesignationRequest request) {
@@ -79,6 +82,13 @@ public class DesignationService {
 
         Designation designation = designationRepository.findByIdAndCompanyId(id, companyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Designation not found"));
+
+        long inUse = userRepository.countByDesignationId(id);
+        if (inUse > 0) {
+            throw new ConflictException(
+                    "Cannot delete designation: " + inUse + " employee(s) are assigned to it",
+                    Map.of("designationId", "Reassign employees before deleting"));
+        }
 
         designationRepository.delete(designation);
         log.info("Deleted designation id={}", id);

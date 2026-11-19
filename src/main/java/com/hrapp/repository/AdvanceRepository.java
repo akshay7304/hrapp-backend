@@ -64,6 +64,13 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
     Page<Advance> findByUser_CompanyIdAndStatus(
             Long companyId, AdvanceStatus status, Pageable pageable);
 
+    /**
+     * Pending queue excluding the caller's own requests (same idea as leave pending).
+     */
+    @EntityGraph(attributePaths = {"user", "approvedBy"})
+    Page<Advance> findByUser_CompanyIdAndStatusAndUser_IdNot(
+            Long companyId, AdvanceStatus status, Long excludeUserId, Pageable pageable);
+
     /** Pending-queue size for the ops dashboard badge. */
     long countByUser_CompanyIdAndStatus(Long companyId, AdvanceStatus status);
 

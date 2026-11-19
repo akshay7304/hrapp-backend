@@ -33,4 +33,13 @@ public class UpdateEmployeeRequest {
     private SalaryType salaryType;
 
     private LocalDate joiningDate;
+
+    /** Optional — EMPLOYEE or HR only (same rules as create). ADMIN via company admin APIs. */
+    private Long roleId;
+
+    /** Biometric enrol id on the device (maps punches → this user). */
+    private String thumbDeviceId;
+
+    /** Profile photo URL (FE/CDN). Blank clears. */
+    private String profilePicUrl;
 }

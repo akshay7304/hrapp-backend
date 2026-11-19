@@ -14,6 +14,7 @@ import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.security.JwtUtil;
 import com.hrapp.security.LoginAttemptService;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.security.TokenRevocationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -50,6 +51,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final LoginAttemptService loginAttemptService;
+    private final TokenRevocationService tokenRevocationService;
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
@@ -145,10 +147,17 @@ public class AuthService {
 
         user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
+        tokenRevocationService.revokeAllForUser(userId);
         log.info("Password changed for userId={}", userId);
     }
 
     private void ensureLoginAllowed(User user) {
+        Company company = user.getCompany();
+        if (company != null && Boolean.FALSE.equals(company.getIsActive())) {
+            log.warn("Login blocked — company inactive for user {}", user.getMobile());
+            throw new UnauthorizedException("Your company account is inactive — contact support");
+        }
+
         String statusName = user.getStatus() != null ? user.getStatus().getName() : null;
         if (statusName == null) {
             log.warn("Login blocked — user {} has no status assigned", user.getMobile());

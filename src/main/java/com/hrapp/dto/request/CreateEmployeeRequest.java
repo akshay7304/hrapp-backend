@@ -50,4 +50,7 @@ public class CreateEmployeeRequest {
 
     @NotNull(message = "Role is required")
     private Long roleId;
+
+    /** Optional biometric enrol id on the device. */
+    private String thumbDeviceId;
 }

@@ -173,7 +173,7 @@ CREATE TABLE `leave_requests` (
   `to_date` date NOT NULL,
   `total_days` decimal(5,1) NOT NULL,
   `reason` text,
-  `status` enum('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+  `status` enum('PENDING','APPROVED','REJECTED','CANCELLED') NOT NULL DEFAULT 'PENDING',
   `actioned_by` bigint DEFAULT NULL,
   `reject_reason` text,
   `applied_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,

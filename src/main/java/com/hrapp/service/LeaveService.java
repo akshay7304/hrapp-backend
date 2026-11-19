@@ -324,7 +324,7 @@ public class LeaveService {
 
     private LeaveRequestResponse cancelInternal(LeaveRequest leaveRequest, String reason) {
         LeaveRequestStatus status = leaveRequest.getStatus();
-        if (status == LeaveRequestStatus.REJECTED) {
+        if (status == LeaveRequestStatus.REJECTED || status == LeaveRequestStatus.CANCELLED) {
             throw new BadRequestException("Leave already cancelled or rejected");
         }
 
@@ -348,7 +348,7 @@ public class LeaveService {
                     leaveRequest.getToDate());
         }
 
-        leaveRequest.setStatus(LeaveRequestStatus.REJECTED);
+        leaveRequest.setStatus(LeaveRequestStatus.CANCELLED);
         leaveRequest.setRejectReason(reason);
         leaveRequest.setActionedAt(java.time.LocalDateTime.now());
         leaveRequest = leaveRequestRepository.save(leaveRequest);
@@ -575,8 +575,13 @@ public class LeaveService {
                 Attendance attendance = opt.get();
                 if (attendance.getStatus() == AttendanceStatus.ON_LEAVE
                         || attendance.getStatus() == AttendanceStatus.HALF_DAY) {
-                    attendance.setStatus(AttendanceStatus.ABSENT);
-                    attendanceRepository.save(attendance);
+                    // Keep punched days; remove synthetic leave-only rows.
+                    if (attendance.getCheckIn() != null || attendance.getCheckOut() != null) {
+                        attendance.setStatus(AttendanceStatus.PRESENT);
+                        attendanceRepository.save(attendance);
+                    } else {
+                        attendanceRepository.delete(attendance);
+                    }
                 }
             }
             cursor = cursor.plusDays(1);

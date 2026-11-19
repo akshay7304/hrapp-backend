@@ -34,6 +34,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtUtil jwtUtil;
+    private final TokenRevocationService tokenRevocationService;
 
     /**
      * server.servlet.context-path is {@code /api/v1}, so the servlet path here
@@ -63,8 +64,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 && !jwtUtil.isRefreshToken(token)
                 && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
+                Long userId = jwtUtil.extractUserId(token);
+                if (tokenRevocationService.isRevoked(userId, jwtUtil.extractIssuedAt(token))) {
+                    log.debug("Rejected revoked JWT for userId={}", userId);
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+
                 AuthenticatedUser principal = new AuthenticatedUser(
-                        jwtUtil.extractUserId(token),
+                        userId,
                         jwtUtil.extractCompanyId(token),
                         jwtUtil.extractMobile(token),
                         jwtUtil.extractRoles(token)

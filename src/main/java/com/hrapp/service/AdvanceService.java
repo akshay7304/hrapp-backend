@@ -112,11 +112,13 @@ public class AdvanceService {
     @Transactional(readOnly = true)
     public PageResponse<AdvanceResponse> getPendingAdvances(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        // Newest first for the web advances list / pending inbox.
+        Long callerId = requireCallerUserId();
+        // Newest first; exclude caller's own pending (self-action already blocked).
         Pageable effective = applyDefaultSort(
                 pageable, Sort.by(Sort.Direction.DESC, "createdAt"));
         return PageResponse.from(advanceRepository
-                .findByUser_CompanyIdAndStatus(companyId, AdvanceStatus.PENDING, effective)
+                .findByUser_CompanyIdAndStatusAndUser_IdNot(
+                        companyId, AdvanceStatus.PENDING, callerId, effective)
                 .map(this::toResponse));
     }
 

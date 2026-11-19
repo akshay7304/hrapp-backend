@@ -30,6 +30,7 @@ public class CompanySettingsResponse {
     private List<String> weekOffDays;
     /** Legacy: first week-off day (same as {@code weekOffDays[0]} when present). */
     private String weekOffDay;
+    private String leaveCountType;
     private String deviceBrand;
     /** Device SN / id used for biometric routing. Not the enrol employee id. */
     private String deviceSerial;
