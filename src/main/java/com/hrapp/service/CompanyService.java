@@ -126,6 +126,7 @@ public class CompanyService {
                 .orElseThrow(() -> new BadRequestException(
                         "'" + ROLE_ADMIN + "' role is not configured"));
 
+        String adminTemporaryPassword = com.hrapp.util.TempPasswordUtil.generate(10);
         User admin = userRepository.save(User.builder()
                 .company(company)
                 .department(hrDepartment)
@@ -134,7 +135,7 @@ public class CompanyService {
                 .fullName(request.getAdminFullName())
                 .mobile(request.getAdminMobile())
                 .email(request.getAdminEmail())
-                .passwordHash(passwordEncoder.encode(request.getAdminMobile()))
+                .passwordHash(passwordEncoder.encode(adminTemporaryPassword))
                 .salaryType(SalaryType.MONTHLY)
                 .joiningDate(LocalDate.now())
                 .build());
@@ -151,7 +152,7 @@ public class CompanyService {
 
         log.info("Created admin user id={} for company id={}", admin.getId(), company.getId());
 
-        return toDetailResponse(company, seeded, admin, 1);
+        return toDetailResponse(company, seeded, admin, 1, adminTemporaryPassword);
     }
 
     // ============================================================
@@ -187,7 +188,7 @@ public class CompanyService {
                 .findFirst()
                 .orElse(null);
         int totalEmployees = (int) userRepository.countByCompanyId(id);
-        return toDetailResponse(company, seeded, admin, totalEmployees);
+        return toDetailResponse(company, seeded, admin, totalEmployees, null);
     }
 
     // ============================================================
@@ -352,7 +353,8 @@ public class CompanyService {
     }
 
     private CompanyDetailResponse toDetailResponse(Company company, SeededDefaults seeded,
-                                                   User admin, int totalEmployees) {
+                                                   User admin, int totalEmployees,
+                                                   String adminTemporaryPassword) {
         return CompanyDetailResponse.builder()
                 .id(company.getId())
                 .name(company.getName())
@@ -367,6 +369,7 @@ public class CompanyService {
                 .holidays(seeded.holidays.stream().map(this::toHolidayResponse).toList())
                 .adminName(admin != null ? admin.getFullName() : null)
                 .adminMobile(admin != null ? admin.getMobile() : null)
+                .adminTemporaryPassword(adminTemporaryPassword)
                 .build();
     }
 

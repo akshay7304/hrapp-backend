@@ -59,7 +59,7 @@ public class AttendancePunch {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "source", nullable = false,
-            columnDefinition = "ENUM('MOBILE','THUMB','MANUAL')")
+            columnDefinition = "ENUM('MOBILE','THUMB','MANUAL','WEB')")
     private AttendanceSource source;
 
     @CreationTimestamp

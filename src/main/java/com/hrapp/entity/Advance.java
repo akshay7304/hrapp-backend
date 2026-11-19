@@ -49,6 +49,10 @@ public class Advance {
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
 
+    /** Set on reject/cancel; original {@link #reason} is preserved. */
+    @Column(name = "reject_reason", columnDefinition = "TEXT")
+    private String rejectReason;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false,
             columnDefinition = "ENUM('PENDING','APPROVED','REJECTED') DEFAULT 'PENDING'")

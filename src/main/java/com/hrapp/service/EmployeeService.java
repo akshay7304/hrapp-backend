@@ -25,6 +25,7 @@ import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.repository.UserStatusRepository;
 import com.hrapp.security.SecurityUtil;
 import com.hrapp.security.TokenRevocationService;
+import com.hrapp.util.TempPasswordUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -33,7 +34,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -64,7 +64,6 @@ public class EmployeeService {
     private static final Set<String> HR_CREATABLE_ROLES = Set.of(ROLE_EMPLOYEE);
     private static final Set<String> TOKEN_REVOKE_STATUSES =
             Set.of("terminated", "resigned", "suspended", "inactive");
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
@@ -106,7 +105,7 @@ public class EmployeeService {
         Company company = companyRepository.findByIdAndIsActive(companyId, true)
                 .orElseThrow(() -> new BadRequestException("Company is inactive or does not exist"));
 
-        String temporaryPassword = generateTemporaryPassword();
+        String temporaryPassword = TempPasswordUtil.generate(10);
         User user = User.builder()
                 .company(company)
                 .department(department)
@@ -361,14 +360,5 @@ public class EmployeeService {
             return null;
         }
         return value.trim();
-    }
-
-    private static String generateTemporaryPassword() {
-        final String alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-        StringBuilder sb = new StringBuilder(10);
-        for (int i = 0; i < 10; i++) {
-            sb.append(alphabet.charAt(SECURE_RANDOM.nextInt(alphabet.length())));
-        }
-        return sb.toString();
     }
 }

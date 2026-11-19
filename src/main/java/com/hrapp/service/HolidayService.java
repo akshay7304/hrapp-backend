@@ -108,6 +108,9 @@ public class HolidayService {
         if (callerCompanyId == null) {
             throw new UnauthorizedException("Caller is not bound to a company");
         }
+        if (pathCompanyId != null && !pathCompanyId.equals(callerCompanyId)) {
+            throw new UnauthorizedException("Cannot access another company's data");
+        }
         return callerCompanyId;
     }
 

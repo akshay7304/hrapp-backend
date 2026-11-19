@@ -37,4 +37,10 @@ public class CompanyDetailResponse {
 
     private String adminName;
     private String adminMobile;
+
+    /**
+     * One-time temporary password for the new company admin — only set on
+     * {@code POST /companies}. Never returned on subsequent GETs.
+     */
+    private String adminTemporaryPassword;
 }

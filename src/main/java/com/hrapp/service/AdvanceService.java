@@ -30,9 +30,8 @@ import java.util.List;
  * employees can cancel while still PENDING. Multi-tenancy is enforced at
  * every entry point via {@link SecurityUtil}.
  *
- * <p>Note: the {@link Advance} entity has a single {@code reason} column,
- * so rejecting or cancelling an advance overwrites the requester's original
- * reason. The previous reason is recorded in the log for auditability.
+ * Reject/cancel store text in {@code reject_reason}; the requester's original
+ * {@code reason} is preserved.
  */
 @Service
 @RequiredArgsConstructor
@@ -96,12 +95,11 @@ public class AdvanceService {
             throw new BadRequestException("Only pending advances can be cancelled");
         }
 
-        String previousReason = advance.getReason();
         advance.setStatus(AdvanceStatus.REJECTED);
-        advance.setReason(CANCEL_REASON);
+        advance.setRejectReason(CANCEL_REASON);
         advance.setActionedAt(LocalDateTime.now());
         advance = advanceRepository.save(advance);
-        log.info("Advance id={} cancelled by user={} (was: '{}')", id, userId, previousReason);
+        log.info("Advance id={} cancelled by user={}", id, userId);
         return toResponse(advance);
     }
 
@@ -179,9 +177,7 @@ public class AdvanceService {
             if (request.getRejectReason() == null || request.getRejectReason().isBlank()) {
                 throw new BadRequestException("Reject reason is required when rejecting an advance");
             }
-            String previousReason = advance.getReason();
-            advance.setReason(request.getRejectReason());
-            log.info("Advance id={} rejected — original reason was: '{}'", id, previousReason);
+            advance.setRejectReason(request.getRejectReason());
         }
 
         advance.setStatus(request.getStatus());
@@ -230,6 +226,7 @@ public class AdvanceService {
                 .empCode(user != null ? user.getEmpCode() : null)
                 .amount(advance.getAmount())
                 .reason(advance.getReason())
+                .rejectReason(advance.getRejectReason())
                 .status(advance.getStatus() != null ? advance.getStatus().name() : null)
                 .deductFromMonth(advance.getDeductFromMonth())
                 .deductFromYear(advance.getDeductFromYear())

@@ -91,7 +91,7 @@ public class AttendanceService {
                         .workedHours(BigDecimal.ZERO)
                         .overtimeHours(BigDecimal.ZERO)
                         .status(AttendanceStatus.PRESENT)
-                        .source(AttendanceSource.MOBILE)
+                        .source(AttendanceSource.WEB)
                         .isManual(false)
                         .isAutoCheckout(false)
                         .build());
@@ -116,7 +116,7 @@ public class AttendanceService {
                 .user(user)
                 .punchTime(now)
                 .punchType(PunchType.IN)
-                .source(AttendanceSource.MOBILE)
+                .source(AttendanceSource.WEB)
                 .build();
         attendancePunchRepository.save(punch);
 
@@ -155,7 +155,7 @@ public class AttendanceService {
                 .user(user)
                 .punchTime(now)
                 .punchType(PunchType.OUT)
-                .source(AttendanceSource.MOBILE)
+                .source(AttendanceSource.WEB)
                 .build();
         attendancePunchRepository.save(punch);
 

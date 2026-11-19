@@ -21,12 +21,10 @@ public class AdvanceResponse {
     private String fullName;
     private String empCode;
     private BigDecimal amount;
-    /**
-     * On approve this is still the requester's original reason; on reject /
-     * cancel it is overwritten with the rejection / cancellation reason
-     * (the Advance entity only has one {@code reason} column).
-     */
+    /** Requester's original reason (never overwritten on reject/cancel). */
     private String reason;
+    /** Present when rejected or cancelled by employee. */
+    private String rejectReason;
     private String status;
     private Integer deductFromMonth;
     private Integer deductFromYear;

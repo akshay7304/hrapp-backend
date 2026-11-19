@@ -16,6 +16,8 @@ import java.util.List;
 @Repository
 public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long> {
 
+    long countByLeaveTypeId(Long leaveTypeId);
+
     @Query("SELECT lr FROM LeaveRequest lr " +
             "JOIN FETCH lr.user " +
             "JOIN FETCH lr.leaveType " +

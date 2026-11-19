@@ -73,9 +73,13 @@ Base path: `/api/v1`. Status as of Nov 2026.
 | Leave cancel | Status becomes **`CANCELLED`** (not REJECTED). |
 | Token revoke | Password change / terminate-like status invalidates existing access tokens (same JVM). |
 
-## Remaining gaps
+## P2 cleanup (fixed)
 
-| Sev | Item | FE note |
-|-----|------|---------|
-| P2 | Company founder password still mobile | Only SUPERADMIN company create |
-| P2 | No multipart photo upload | Set `profilePicUrl` after FE/CDN upload |
+| Item | FE action |
+|------|-----------|
+| Company create | Response may include one-time `adminTemporaryPassword` |
+| Advances reject/cancel | `reason` stays original; `rejectReason` holds reject/cancel text |
+| Attendance punch source | New web punches use `WEB` (legacy `MOBILE` still valid) |
+| Path `companyId` | Wrong company id for ADMIN → **403** (no silent remap) |
+| Avatar | Still URL-only — set `profilePicUrl` after FE/CDN upload |
+

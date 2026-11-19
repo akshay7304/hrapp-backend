@@ -96,6 +96,13 @@ public class User {
     @Column(name = "profile_pic_url", length = 255)
     private String profilePicUrl;
 
+    /**
+     * Access tokens issued at or before this instant are rejected.
+     * Set on password change / account termination.
+     */
+    @Column(name = "tokens_revoked_before")
+    private LocalDateTime tokensRevokedBefore;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

@@ -9,6 +9,7 @@ import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.repository.CompanyRepository;
 import com.hrapp.repository.LeaveBalanceRepository;
+import com.hrapp.repository.LeaveRequestRepository;
 import com.hrapp.repository.LeaveTypeRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Leave-type CRUD. SUPERADMIN can manage any company; ADMIN is locked to their
@@ -32,6 +34,7 @@ public class LeaveTypeService {
 
     private final LeaveTypeRepository leaveTypeRepository;
     private final LeaveBalanceRepository leaveBalanceRepository;
+    private final LeaveRequestRepository leaveRequestRepository;
     private final CompanyRepository companyRepository;
 
     @Transactional
@@ -115,7 +118,15 @@ public class LeaveTypeService {
         if (balanceCount > 0) {
             throw new ConflictException(
                     "Cannot delete leave type: " + balanceCount
-                            + " employee balance(s) exist. Deactivate or reassign balances instead.");
+                            + " employee balance(s) exist. Deactivate or reassign balances instead.",
+                    Map.of("leaveTypeId", "Balances exist"));
+        }
+        long requestCount = leaveRequestRepository.countByLeaveTypeId(id);
+        if (requestCount > 0) {
+            throw new ConflictException(
+                    "Cannot delete leave type: " + requestCount
+                            + " leave request(s) reference it.",
+                    Map.of("leaveTypeId", "Leave requests exist"));
         }
 
         leaveTypeRepository.delete(leaveType);
@@ -132,6 +143,9 @@ public class LeaveTypeService {
         Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();
         if (callerCompanyId == null) {
             throw new UnauthorizedException("Caller is not bound to a company");
+        }
+        if (pathCompanyId != null && !pathCompanyId.equals(callerCompanyId)) {
+            throw new UnauthorizedException("Cannot access another company's data");
         }
         return callerCompanyId;
     }

@@ -79,9 +79,9 @@ public class Attendance {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "source", nullable = false,
-            columnDefinition = "ENUM('THUMB','MOBILE','MANUAL') DEFAULT 'MOBILE'")
+            columnDefinition = "ENUM('THUMB','MOBILE','MANUAL','WEB') DEFAULT 'MOBILE'")
     @Builder.Default
-    private AttendanceSource source = AttendanceSource.MOBILE;
+    private AttendanceSource source = AttendanceSource.WEB;
 
     @Column(name = "is_manual", nullable = false)
     @Builder.Default
