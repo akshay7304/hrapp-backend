@@ -115,9 +115,11 @@ CREATE TABLE `company_settings` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `leave_count_type` varchar(50) NOT NULL DEFAULT 'EXCLUDE_WEEK_OFF_AND_HOLIDAYS',
   `device_brand` varchar(20) NOT NULL DEFAULT 'ZKTECO',
-  `device_secret` varchar(100) NOT NULL DEFAULT 'hrapp-device-secret-2026',
+  `device_secret` varchar(100) NOT NULL,
+  `device_serial` varchar(100) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_company_settings` (`company_id`),
+  UNIQUE KEY `uq_settings_device_serial` (`device_serial`),
   CONSTRAINT `fk_settings_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

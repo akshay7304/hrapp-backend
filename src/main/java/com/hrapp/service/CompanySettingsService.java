@@ -3,9 +3,10 @@ package com.hrapp.service;
 import com.hrapp.dto.request.CompanySettingsRequest;
 import com.hrapp.dto.response.CompanySettingsResponse;
 import com.hrapp.entity.CompanySettings;
+import com.hrapp.exception.BadRequestException;
+import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
-import com.hrapp.exception.BadRequestException;
 import com.hrapp.repository.CompanyRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.security.SecurityUtil;
@@ -16,6 +17,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * Reads/updates per-company attendance configuration. SUPERADMIN can target
@@ -54,22 +57,43 @@ public class CompanySettingsService {
         settings.setOvertimeAfterHours(request.getOvertimeAfterHours());
         settings.setLateMarkAfterMinutes(request.getLateMarkAfterMinutes());
         settings.setWeekOffDay(resolveWeekOffStorage(request));
-        // Device columns are NOT NULL in DB. Only overwrite when the client
-        // sends a value; if the stored row is somehow null, fall back to defaults.
+
         if (request.getDeviceBrand() != null && !request.getDeviceBrand().isBlank()) {
             settings.setDeviceBrand(request.getDeviceBrand().trim());
         } else if (settings.getDeviceBrand() == null || settings.getDeviceBrand().isBlank()) {
             settings.setDeviceBrand("ZKTECO");
         }
+
+        if (request.getDeviceSerial() != null) {
+            String serial = request.getDeviceSerial().isBlank() ? null : request.getDeviceSerial().trim();
+            if (serial != null) {
+                Long settingsId = settings.getId();
+                companySettingsRepository.findByDeviceSerial(serial)
+                        .filter(other -> !other.getId().equals(settingsId))
+                        .ifPresent(other -> {
+                            throw new ConflictException(
+                                    "Device serial already registered to another company",
+                                    Map.of("deviceSerial", "Already in use"));
+                        });
+            }
+            settings.setDeviceSerial(serial);
+        }
+
+        // Write-only: only overwrite when the client sends a non-blank secret.
         if (request.getDeviceSecret() != null && !request.getDeviceSecret().isBlank()) {
             settings.setDeviceSecret(request.getDeviceSecret().trim());
         } else if (settings.getDeviceSecret() == null || settings.getDeviceSecret().isBlank()) {
-            settings.setDeviceSecret("hrapp-device-secret-2026");
+            settings.setDeviceSecret(generateDeviceSecret());
         }
 
         settings = companySettingsRepository.save(settings);
         log.info("Updated company settings for company={}", effectiveCompanyId);
         return toResponse(settings);
+    }
+
+    /** Random secret for new companies / empty rows — never a shared default. */
+    public static String generateDeviceSecret() {
+        return UUID.randomUUID().toString().replace("-", "");
     }
 
     private String resolveWeekOffStorage(CompanySettingsRequest request) {
@@ -97,6 +121,7 @@ public class CompanySettingsService {
     }
 
     private CompanySettingsResponse toResponse(CompanySettings settings) {
+        String secret = settings.getDeviceSecret();
         return CompanySettingsResponse.builder()
                 .id(settings.getId())
                 .companyId(settings.getCompany() != null ? settings.getCompany().getId() : null)
@@ -109,7 +134,8 @@ public class CompanySettingsService {
                 .weekOffDays(WeekOffSupport.toApiList(settings.getWeekOffDay()))
                 .weekOffDay(firstWeekOff(settings.getWeekOffDay()))
                 .deviceBrand(settings.getDeviceBrand())
-                .deviceSecret(settings.getDeviceSecret())
+                .deviceSerial(settings.getDeviceSerial())
+                .deviceSecretConfigured(secret != null && !secret.isBlank())
                 .updatedAt(settings.getUpdatedAt())
                 .build();
     }

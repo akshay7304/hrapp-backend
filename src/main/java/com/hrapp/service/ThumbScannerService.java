@@ -279,35 +279,21 @@ public class ThumbScannerService {
     // ============================================================
 
     /**
-     * Resolves a device-side serial to a {@link CompanySettings} record and
-     * verifies the per-company shared secret in one step.
-     * <p>
-     * Routing works through the {@code users.thumb_device_id} index — any user
-     * enrolled on the device tells us which company the device belongs to.
-     * This is cheaper than scanning {@code company_settings} and avoids
-     * needing a dedicated device-registry table; the typical deployment has
-     * exactly one device per company so collisions across tenants don't
-     * happen in practice.
-     *
-     * @throws BadRequestException if no user is enrolled with this serial,
-     *         if the resolved company has no settings row, or if the
-     *         supplied secret doesn't match.
+     * Resolves a device SN / id to {@link CompanySettings} via
+     * {@code company_settings.device_serial}, then verifies {@code deviceSecret}.
+     * Employee enrol ids stay on {@code users.thumb_device_id} and are used
+     * later when compacting punches into attendance — not for company routing.
      */
     private CompanySettings findCompanyByDeviceSerial(String deviceSerial, String deviceSecret) {
         if (deviceSerial == null || deviceSerial.isBlank()) {
             throw new BadRequestException("Unknown device");
         }
-
-        User user = userRepository.findByThumbDeviceId(deviceSerial)
-                .orElseThrow(() -> new BadRequestException("Unknown device"));
-
-        Long companyId = user.getCompany() != null ? user.getCompany().getId() : null;
-        if (companyId == null) {
-            throw new BadRequestException("Unknown device");
+        if (deviceSecret == null || deviceSecret.isBlank()) {
+            throw new BadRequestException("Invalid device secret");
         }
 
-        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
-                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+        CompanySettings settings = companySettingsRepository.findByDeviceSerial(deviceSerial.trim())
+                .orElseThrow(() -> new BadRequestException("Unknown device"));
 
         if (settings.getDeviceSecret() == null
                 || !settings.getDeviceSecret().equals(deviceSecret)) {

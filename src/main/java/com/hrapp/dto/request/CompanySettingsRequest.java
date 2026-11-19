@@ -56,6 +56,15 @@ public class CompanySettingsRequest {
     /** Optional — manufacturer/protocol hint for the biometric device. */
     private String deviceBrand;
 
-    /** Optional — shared secret the device must send on every push. */
+    /**
+     * Optional — device SN / serial for biometric routing.
+     * Blank clears the serial (device pushes will fail until set again).
+     */
+    private String deviceSerial;
+
+    /**
+     * Optional — shared secret the device must send on every push.
+     * Write-only: never returned on GET. Omit to leave unchanged.
+     */
     private String deviceSecret;
 }

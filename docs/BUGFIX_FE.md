@@ -50,3 +50,20 @@ Base path: `/api/v1`. Status as of Nov 2026.
 |-----|-----------|
 | `GET /dashboard/employee` | Employee home widgets. |
 | `GET /dashboard/ops` | ADMIN/HR pending counts + today summary (incl. thumb pending count). |
+
+## P0 security (fixed — rebuild)
+
+| Item | FE action |
+|------|-----------|
+| CORS | `CORS_ALLOWED_ORIGINS` (default `http://localhost:3000,http://localhost:5173`) |
+| Settings secret | `deviceSecret` **never returned** — use `deviceSecretConfigured`. Write-only on PUT. |
+| `deviceSerial` | Optional biometric SN for routing (not employee enrol id) |
+| Create roles | ADMIN → EMPLOYEE/HR only; HR → EMPLOYEE only; ADMIN via `/companies/{id}/admins` |
+
+## Remaining gaps
+
+| Sev | Item | FE until BE fixes |
+|-----|------|-------------------|
+| P1 | `/advances/pending` includes self | Hide approve on own rows |
+| P1 | No avatar upload | `avatar` null → initials |
+| P1 | Default password = mobile | Force change-password on first login |

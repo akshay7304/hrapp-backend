@@ -53,6 +53,13 @@ public class EmployeeService {
 
     private static final String STATUS_ACTIVE = "Active";
     private static final String ROLE_SUPERADMIN = "SUPERADMIN";
+    private static final String ROLE_ADMIN = "ADMIN";
+    private static final String ROLE_HR = "HR";
+    private static final String ROLE_EMPLOYEE = "EMPLOYEE";
+    private static final java.util.Set<String> ADMIN_CREATABLE_ROLES =
+            java.util.Set.of(ROLE_EMPLOYEE, ROLE_HR);
+    private static final java.util.Set<String> HR_CREATABLE_ROLES =
+            java.util.Set.of(ROLE_EMPLOYEE);
 
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
@@ -88,6 +95,7 @@ public class EmployeeService {
 
         Role role = roleRepository.findById(request.getRoleId())
                 .orElseThrow(() -> new ResourceNotFoundException("Role not found"));
+        ensureCreatableRole(role);
 
         Company company = companyRepository.findByIdAndIsActive(companyId, true)
                 .orElseThrow(() -> new BadRequestException("Company is inactive or does not exist"));
@@ -223,6 +231,28 @@ public class EmployeeService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Profile not found"));
         return toResponse(user, fetchRoleNames(user.getId()));
+    }
+
+    /**
+     * Blocks privilege escalation: SUPERADMIN never via create; ADMIN only via
+     * {@code /companies/{id}/admins}. ADMIN may create EMPLOYEE/HR; HR only EMPLOYEE.
+     */
+    private void ensureCreatableRole(Role role) {
+        String roleName = role.getName();
+        if (ROLE_SUPERADMIN.equals(roleName) || ROLE_ADMIN.equals(roleName)) {
+            throw new BadRequestException(
+                    "Cannot assign " + roleName + " via employee create. "
+                            + "Use company admin APIs for ADMIN; SUPERADMIN is platform-only.");
+        }
+        if (SecurityUtil.hasRole(ROLE_ADMIN) || SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
+            if (!ADMIN_CREATABLE_ROLES.contains(roleName)) {
+                throw new BadRequestException("Allowed roles on create: EMPLOYEE, HR");
+            }
+            return;
+        }
+        if (!HR_CREATABLE_ROLES.contains(roleName)) {
+            throw new BadRequestException("HR can only create EMPLOYEE users");
+        }
     }
 
     private Long requireCallerCompanyId() {

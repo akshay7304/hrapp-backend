@@ -10,4 +10,6 @@ import java.util.Optional;
 public interface CompanySettingsRepository extends JpaRepository<CompanySettings, Long> {
 
     Optional<CompanySettings> findByCompanyId(Long companyId);
+
+    Optional<CompanySettings> findByDeviceSerial(String deviceSerial);
 }

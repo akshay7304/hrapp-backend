@@ -31,6 +31,9 @@ public class CompanySettingsResponse {
     /** Legacy: first week-off day (same as {@code weekOffDays[0]} when present). */
     private String weekOffDay;
     private String deviceBrand;
-    private String deviceSecret;
+    /** Device SN / id used for biometric routing. Not the enrol employee id. */
+    private String deviceSerial;
+    /** True when a device shared secret is configured (secret itself is never returned). */
+    private Boolean deviceSecretConfigured;
     private LocalDateTime updatedAt;
 }

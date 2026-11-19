@@ -330,6 +330,8 @@ public class CompanyService {
                 .lateMarkAfterMinutes(15)
                 .weekOffDay("SUNDAY")
                 .leaveCountType("EXCLUDE_WEEK_OFF_AND_HOLIDAYS")
+                .deviceBrand("ZKTECO")
+                .deviceSecret(CompanySettingsService.generateDeviceSecret())
                 .build());
     }
 

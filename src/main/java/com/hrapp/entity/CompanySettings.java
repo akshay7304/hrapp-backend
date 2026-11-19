@@ -90,9 +90,17 @@ public class CompanySettings {
      * Shared secret the device must include in every push so the server can
      * verify the call came from the registered device. Stored as plain text
      * because the device fleet doesn't support TLS client auth.
+     * Never return this value in API responses.
      */
-    @Column(name = "device_secret", length = 100)
+    @Column(name = "device_secret", length = 100, nullable = false)
     private String deviceSecret;
+
+    /**
+     * Physical device serial / SN used to route public thumb pushes to this
+     * company. Distinct from {@code users.thumb_device_id} (employee enrol id).
+     */
+    @Column(name = "device_serial", length = 100)
+    private String deviceSerial;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
