@@ -5,11 +5,14 @@
 #   GitHub repo → Settings → Secrets and variables → Actions → Variables
 #   Add KEEP_WARM_URL = https://<your-render-host>/api/v1/health
 #
+# Note: GitHub cron is best-effort (often delayed hours, not exact */10).
+# If the service is cold, Render wake-up can take >60s — use a long timeout.
+#
 name: Keep Render warm
 
 on:
   schedule:
-    # Every 10 minutes (UTC). Free-tier idle timeout is ~15 minutes.
+    # Requested every 10 minutes (UTC). GitHub may delay this significantly.
     - cron: "*/10 * * * *"
   workflow_dispatch: # allow manual run from Actions tab
 
@@ -26,6 +29,15 @@ jobs:
             exit 1
           fi
           echo "Pinging $KEEP_WARM_URL"
-          curl -fsS --max-time 60 -o /tmp/health.json -w "HTTP %{http_code} in %{time_total}s\n" "$KEEP_WARM_URL"
+          # --max-time 180: allow Render cold start
+          # --retry 3: retry on timeout / transient failures
+          curl -fsS \
+            --max-time 180 \
+            --retry 3 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            -o /tmp/health.json \
+            -w "HTTP %{http_code} in %{time_total}s\n" \
+            "$KEEP_WARM_URL"
           cat /tmp/health.json
           echo
