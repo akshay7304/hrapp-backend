@@ -71,9 +71,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiResponse<?>> handleConflict(ConflictException ex) {
         log.warn("Conflict: {}", ex.getMessage());
+        Object errors = ex.getFieldErrors().isEmpty() ? null : ex.getFieldErrors();
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
-                .body(ApiResponse.error(ex.getMessage(), null));
+                .body(ApiResponse.error(ex.getMessage(), errors));
     }
 
     /**
@@ -128,11 +129,33 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiResponse<?>> handleDataIntegrity(DataIntegrityViolationException ex) {
-        String cause = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        String cause = ex.getMostSpecificCause() != null
+                ? ex.getMostSpecificCause().getMessage()
+                : ex.getMessage();
         log.warn("Data integrity violation: {}", cause);
+
+        String lower = cause != null ? cause.toLowerCase() : "";
+        if (lower.contains("uq_mobile") || lower.contains("mobile")) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error(
+                            "Mobile number is already registered",
+                            Map.of("adminMobile", "Mobile number is already registered")));
+        }
+        if (lower.contains("uq_emp_code") || lower.contains("emp_code")) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error(
+                            "Employee code already exists in this company",
+                            Map.of("empCode", "Employee code already exists in this company")));
+        }
+        if (lower.contains("uq_role_name") || lower.contains("uq_status_name")) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error("A record with this name already exists", null));
+        }
+
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
-                .body(ApiResponse.error("Data conflict - record already exists or constraint violation", null));
+                .body(ApiResponse.error(
+                        "Data conflict - record already exists or constraint violation", null));
     }
 
     /** A required {@code @RequestParam} was missing from the request. */

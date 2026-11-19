@@ -8,6 +8,7 @@ import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.repository.CompanyRepository;
+import com.hrapp.repository.LeaveBalanceRepository;
 import com.hrapp.repository.LeaveTypeRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ public class LeaveTypeService {
     private static final String ROLE_SUPERADMIN = "SUPERADMIN";
 
     private final LeaveTypeRepository leaveTypeRepository;
+    private final LeaveBalanceRepository leaveBalanceRepository;
     private final CompanyRepository companyRepository;
 
     @Transactional
@@ -43,11 +45,18 @@ public class LeaveTypeService {
         Company company = companyRepository.findById(effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
 
+        boolean allowHalfDay = Boolean.TRUE.equals(request.getAllowHalfDay());
+        boolean carryForward = Boolean.TRUE.equals(request.getCarryForward());
+        int maxCarry = resolveMaxCarryForwardDays(carryForward, request.getMaxCarryForwardDays());
+
         LeaveType leaveType = LeaveType.builder()
                 .company(company)
                 .name(request.getName())
                 .annualQuota(request.getAnnualQuota())
                 .isPaid(request.getIsPaid())
+                .allowHalfDay(allowHalfDay)
+                .carryForward(carryForward)
+                .maxCarryForwardDays(maxCarry)
                 .build();
         leaveType = leaveTypeRepository.save(leaveType);
 
@@ -76,12 +85,22 @@ public class LeaveTypeService {
             throw new ConflictException("Leave type with this name already exists");
         }
 
+        boolean allowHalfDay = Boolean.TRUE.equals(request.getAllowHalfDay());
+        boolean carryForward = Boolean.TRUE.equals(request.getCarryForward());
+        int maxCarry = resolveMaxCarryForwardDays(carryForward, request.getMaxCarryForwardDays());
+
+        // annualQuota changes apply to *future* balance seeds only — existing
+        // leave_balances rows are left untouched (bug 8.3).
         leaveType.setName(request.getName());
         leaveType.setAnnualQuota(request.getAnnualQuota());
         leaveType.setIsPaid(request.getIsPaid());
+        leaveType.setAllowHalfDay(allowHalfDay);
+        leaveType.setCarryForward(carryForward);
+        leaveType.setMaxCarryForwardDays(maxCarry);
         leaveType = leaveTypeRepository.save(leaveType);
 
-        log.info("Updated leave type id={} name='{}'", leaveType.getId(), leaveType.getName());
+        log.info("Updated leave type id={} name='{}' (existing employee balances not rewritten)",
+                leaveType.getId(), leaveType.getName());
         return toResponse(leaveType);
     }
 
@@ -91,6 +110,14 @@ public class LeaveTypeService {
 
         LeaveType leaveType = leaveTypeRepository.findByIdAndCompanyId(id, effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Leave type not found"));
+
+        long balanceCount = leaveBalanceRepository.countByLeaveTypeId(id);
+        if (balanceCount > 0) {
+            throw new ConflictException(
+                    "Cannot delete leave type: " + balanceCount
+                            + " employee balance(s) exist. Deactivate or reassign balances instead.");
+        }
+
         leaveTypeRepository.delete(leaveType);
         log.info("Deleted leave type id={}", id);
     }
@@ -107,6 +134,13 @@ public class LeaveTypeService {
             throw new UnauthorizedException("Caller is not bound to a company");
         }
         return callerCompanyId;
+    }
+
+    private int resolveMaxCarryForwardDays(boolean carryForward, Integer requested) {
+        if (!carryForward) {
+            return 0;
+        }
+        return requested != null ? requested : 0;
     }
 
     private LeaveTypeResponse toResponse(LeaveType leaveType) {

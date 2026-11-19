@@ -110,7 +110,7 @@ CREATE TABLE `company_settings` (
   `half_day_hours` decimal(4,2) NOT NULL DEFAULT '4.50',
   `overtime_after_hours` decimal(4,2) NOT NULL DEFAULT '9.00',
   `late_mark_after_minutes` int NOT NULL DEFAULT '15',
-  `week_off_day` varchar(10) NOT NULL DEFAULT 'SUNDAY',
+  `week_off_day` varchar(100) NOT NULL DEFAULT 'SUNDAY',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `leave_count_type` varchar(50) NOT NULL DEFAULT 'EXCLUDE_WEEK_OFF_AND_HOLIDAYS',

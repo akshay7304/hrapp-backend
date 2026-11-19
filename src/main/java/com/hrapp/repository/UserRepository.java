@@ -45,6 +45,25 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Page<User> findByCompanyId(Long companyId, Pageable pageable);
 
     /**
+     * Paginated employee list with optional filters for the web directory.
+     * Pass {@code null} for unused filters. {@code search} matches name, emp code, or mobile.
+     */
+    @EntityGraph(attributePaths = {"company", "department", "designation", "status"})
+    @Query("SELECT u FROM User u WHERE u.company.id = :companyId "
+            + "AND (:departmentId IS NULL OR u.department.id = :departmentId) "
+            + "AND (:statusId IS NULL OR u.status.id = :statusId) "
+            + "AND (:search IS NULL OR :search = '' "
+            + "OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :search, '%')) "
+            + "OR LOWER(u.empCode) LIKE LOWER(CONCAT('%', :search, '%')) "
+            + "OR u.mobile LIKE CONCAT('%', :search, '%'))")
+    Page<User> searchByCompany(
+            @Param("companyId") Long companyId,
+            @Param("departmentId") Long departmentId,
+            @Param("statusId") Long statusId,
+            @Param("search") String search,
+            Pageable pageable);
+
+    /**
      * Fetches all employees of a company whose {@code status.name} matches
      * (typically {@code "Active"}). Used by payroll to scope a payroll run
      * to the currently-employed workforce.

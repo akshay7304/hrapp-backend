@@ -28,6 +28,7 @@ import com.hrapp.repository.LeaveRequestRepository;
 import com.hrapp.repository.LeaveTypeRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -101,7 +102,8 @@ public class LeaveService {
             if (exists) {
                 continue;
             }
-            BigDecimal quota = BigDecimal.valueOf(leaveType.getAnnualQuota()).setScale(1, RoundingMode.HALF_UP);
+            BigDecimal quota = prorateAnnualQuota(
+                    leaveType.getAnnualQuota(), user.getJoiningDate(), year);
             LeaveBalance balance = LeaveBalance.builder()
                     .user(user)
                     .leaveType(leaveType)
@@ -359,39 +361,65 @@ public class LeaveService {
     //  Listings
     // ============================================================
 
+    /**
+     * Personal leave history for the logged-in user (EMPLOYEE / HR / ADMIN).
+     * No role-based filtering — only {@code userId} from the JWT.
+     * <p>
+     * {@code month} optional: omit for full-year history (web leave history screen).
+     */
     @Transactional(readOnly = true)
     public PageResponse<LeaveRequestResponse> getMyLeaveRequests(
             Integer month, Integer year, Pageable pageable) {
         Long userId = requireCallerUserId();
-        YearMonth ym = YearMonth.of(year, month);
+        if (year == null) {
+            throw new BadRequestException("year is required");
+        }
+        LocalDate from;
+        LocalDate to;
+        if (month == null) {
+            from = LocalDate.of(year, 1, 1);
+            to = LocalDate.of(year, 12, 31);
+        } else {
+            if (month < 1 || month > 12) {
+                throw new BadRequestException("month must be between 1 and 12");
+            }
+            YearMonth ym = YearMonth.of(year, month);
+            from = ym.atDay(1);
+            to = ym.atEndOfMonth();
+        }
         Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "appliedAt"));
         return PageResponse.from(
                 leaveRequestRepository
-                        .findByUserIdAndFromDateBetween(
-                                userId, ym.atDay(1), ym.atEndOfMonth(), effective)
+                        .findByUserIdAndFromDateBetween(userId, from, to, effective)
                         .map(this::toRequestResponse));
     }
 
     @Transactional(readOnly = true)
     public PageResponse<LeaveRequestResponse> getPendingLeaveRequests(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
+        Long callerId = requireCallerUserId();
         Pageable effective = applyDefaultSort(pageable, Sort.by("appliedAt"));
+        // Exclude the caller's own pending leaves — actionLeave already blocks
+        // self-approve; hiding them from /pending removes the UI temptation too.
         return PageResponse.from(
                 leaveRequestRepository
-                        .findByUser_CompanyIdAndStatus(companyId, LeaveRequestStatus.PENDING, effective)
+                        .findByUser_CompanyIdAndStatusAndUser_IdNot(
+                                companyId, LeaveRequestStatus.PENDING, callerId, effective)
                         .map(this::toRequestResponse));
     }
 
     @Transactional(readOnly = true)
     public PageResponse<LeaveRequestResponse> getCompanyLeaveRequests(
-            Integer month, Integer year, Pageable pageable) {
+            Integer month, Integer year, LeaveRequestStatus status, Long employeeId,
+            Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         YearMonth ym = YearMonth.of(year, month);
         Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "appliedAt"));
         return PageResponse.from(
                 leaveRequestRepository
-                        .findByUser_CompanyIdAndFromDateBetween(
-                                companyId, ym.atDay(1), ym.atEndOfMonth(), effective)
+                        .findCompanyFiltered(
+                                companyId, ym.atDay(1), ym.atEndOfMonth(),
+                                status, employeeId, effective)
                         .map(this::toRequestResponse));
     }
 
@@ -459,7 +487,6 @@ public class LeaveService {
         }
 
         LeaveCountType countType = resolveCountType(settings.getLeaveCountType());
-        DayOfWeek weekOff = parseDayOfWeek(settings.getWeekOffDay());
         Set<LocalDate> holidays = countType == LeaveCountType.EXCLUDE_WEEK_OFF_AND_HOLIDAYS
                 ? new HashSet<>(fetchHolidayDates(companyId, from, to))
                 : Set.of();
@@ -468,8 +495,8 @@ public class LeaveService {
         LocalDate cursor = from;
         while (!cursor.isAfter(to)) {
             boolean skip = false;
-            if (countType != LeaveCountType.CALENDAR_DAYS && weekOff != null
-                    && cursor.getDayOfWeek() == weekOff) {
+            if (countType != LeaveCountType.CALENDAR_DAYS
+                    && WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay())) {
                 skip = true;
             }
             if (!skip && countType == LeaveCountType.EXCLUDE_WEEK_OFF_AND_HOLIDAYS
@@ -485,11 +512,29 @@ public class LeaveService {
     }
 
     boolean isWorkingDay(LocalDate date, CompanySettings settings, List<LocalDate> holidays) {
-        DayOfWeek weekOff = parseDayOfWeek(settings.getWeekOffDay());
-        if (weekOff != null && date.getDayOfWeek() == weekOff) {
+        if (WeekOffSupport.isWeekOff(date, settings.getWeekOffDay())) {
             return false;
         }
         return holidays == null || !holidays.contains(date);
+    }
+
+    /**
+     * Calendar-year pro-rata: joiners in the balance year get
+     * {@code annualQuota * remainingMonths / 12} (join month inclusive).
+     * Employees who joined before the year get the full quota.
+     */
+    BigDecimal prorateAnnualQuota(int annualQuota, LocalDate joiningDate, int year) {
+        BigDecimal full = BigDecimal.valueOf(annualQuota).setScale(1, RoundingMode.HALF_UP);
+        if (joiningDate == null || joiningDate.getYear() < year) {
+            return full;
+        }
+        if (joiningDate.getYear() > year) {
+            return BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP);
+        }
+        int monthsRemaining = 12 - joiningDate.getMonthValue() + 1;
+        return BigDecimal.valueOf(annualQuota)
+                .multiply(BigDecimal.valueOf(monthsRemaining))
+                .divide(BigDecimal.valueOf(12), 1, RoundingMode.HALF_UP);
     }
 
     void autoUpdateAttendance(User user, LocalDate from, LocalDate to, boolean isHalfDay,
@@ -553,18 +598,6 @@ public class LeaveService {
         } catch (IllegalArgumentException ex) {
             log.warn("Invalid leave_count_type '{}', defaulting to EXCLUDE_WEEK_OFF_AND_HOLIDAYS", value);
             return LeaveCountType.EXCLUDE_WEEK_OFF_AND_HOLIDAYS;
-        }
-    }
-
-    private DayOfWeek parseDayOfWeek(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return DayOfWeek.valueOf(value.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
-            log.warn("Invalid week_off_day '{}'", value);
-            return null;
         }
     }
 

@@ -49,12 +49,12 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
 
     long countByUserIdAndStatus(Long userId, AdvanceStatus status);
 
-    /** Admin/HR pending queue — oldest first so first-come-first-served. */
+    /** Admin/HR pending queue — newest first (web list default). */
     @Query("SELECT a FROM Advance a " +
             "JOIN FETCH a.user u " +
             "LEFT JOIN FETCH a.approvedBy " +
             "WHERE u.company.id = :companyId AND a.status = :status " +
-            "ORDER BY a.createdAt ASC")
+            "ORDER BY a.createdAt DESC")
     List<Advance> findByUser_CompanyIdAndStatus(
             @Param("companyId") Long companyId,
             @Param("status") AdvanceStatus status);
@@ -78,4 +78,15 @@ public interface AdvanceRepository extends JpaRepository<Advance, Long> {
     /** Paginated company history. Default order is encoded in the method name. */
     @EntityGraph(attributePaths = {"user", "approvedBy"})
     Page<Advance> findByUser_CompanyIdOrderByCreatedAtDesc(Long companyId, Pageable pageable);
+
+    /** Company advances with optional status / employee filters (newest first via Pageable sort). */
+    @EntityGraph(attributePaths = {"user", "approvedBy"})
+    @Query("SELECT a FROM Advance a WHERE a.user.company.id = :companyId "
+            + "AND (:status IS NULL OR a.status = :status) "
+            + "AND (:employeeId IS NULL OR a.user.id = :employeeId)")
+    Page<Advance> findCompanyFiltered(
+            @Param("companyId") Long companyId,
+            @Param("status") AdvanceStatus status,
+            @Param("employeeId") Long employeeId,
+            Pageable pageable);
 }

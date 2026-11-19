@@ -5,6 +5,7 @@ import com.hrapp.dto.request.ActionAdvanceRequest;
 import com.hrapp.dto.request.AdvanceRequest;
 import com.hrapp.dto.response.AdvanceResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.enums.AdvanceStatus;
 import com.hrapp.service.AdvanceService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -35,7 +36,7 @@ public class AdvanceController {
     private final AdvanceService advanceService;
 
     @PostMapping
-    @PreAuthorize("hasRole('EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
     public ResponseEntity<ApiResponse<AdvanceResponse>> requestAdvance(
             @Valid @RequestBody AdvanceRequest request) {
         AdvanceResponse data = advanceService.requestAdvance(request);
@@ -43,15 +44,16 @@ public class AdvanceController {
                 .body(ApiResponse.success(data, "Advance requested successfully"));
     }
 
+    /** Personal advances newest-first — ADMIN/HR/EMPLOYEE (web "my advances"). */
     @GetMapping("/my")
-    @PreAuthorize("hasRole('EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
     public ResponseEntity<ApiResponse<List<AdvanceResponse>>> getMyAdvances() {
         List<AdvanceResponse> data = advanceService.getMyAdvances();
         return ResponseEntity.ok(ApiResponse.success(data, "Advances fetched successfully"));
     }
 
     @DeleteMapping("/{id}/cancel")
-    @PreAuthorize("hasRole('EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
     public ResponseEntity<ApiResponse<AdvanceResponse>> cancelAdvance(@PathVariable("id") Long id) {
         AdvanceResponse data = advanceService.cancelAdvance(id);
         return ResponseEntity.ok(ApiResponse.success(data, "Advance cancelled successfully"));
@@ -70,10 +72,13 @@ public class AdvanceController {
     @GetMapping("/company")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
     public ResponseEntity<ApiResponse<PageResponse<AdvanceResponse>>> getCompanyAdvances(
+            @RequestParam(required = false) AdvanceStatus status,
+            @RequestParam(required = false) Long employeeId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Pageable pageable = PageRequest.of(page, size);
-        PageResponse<AdvanceResponse> data = advanceService.getCompanyAdvances(pageable);
+        PageResponse<AdvanceResponse> data =
+                advanceService.getCompanyAdvances(status, employeeId, pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Advances fetched successfully"));
     }
 

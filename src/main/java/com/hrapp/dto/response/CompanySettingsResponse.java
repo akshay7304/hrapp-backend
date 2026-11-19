@@ -9,6 +9,7 @@ import lombok.Setter;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 
 @Getter
 @Setter
@@ -25,6 +26,9 @@ public class CompanySettingsResponse {
     private BigDecimal halfDayHours;
     private BigDecimal overtimeAfterHours;
     private Integer lateMarkAfterMinutes;
+    /** Preferred: all week-off days, e.g. {@code ["SATURDAY","SUNDAY"]}. */
+    private List<String> weekOffDays;
+    /** Legacy: first week-off day (same as {@code weekOffDays[0]} when present). */
     private String weekOffDay;
     private String deviceBrand;
     private String deviceSecret;

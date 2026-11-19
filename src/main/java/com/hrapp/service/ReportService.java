@@ -40,7 +40,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.Comparator;
@@ -397,7 +396,6 @@ public class ReportService {
      */
     private Integer calculateWorkingDays(LocalDate from, LocalDate to,
                                          CompanySettings settings, Long companyId) {
-        DayOfWeek weekOff = parseDayOfWeek(settings.getWeekOffDay());
         Set<LocalDate> holidays = holidayRepository
                 .findByCompanyIdAndHolidayDateBetween(companyId, from, to).stream()
                 .map(Holiday::getHolidayDate)
@@ -406,7 +404,7 @@ public class ReportService {
         int working = 0;
         LocalDate cursor = from;
         while (!cursor.isAfter(to)) {
-            boolean skip = (weekOff != null && cursor.getDayOfWeek() == weekOff)
+            boolean skip = com.hrapp.util.WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay())
                     || holidays.contains(cursor);
             if (!skip) {
                 working++;
@@ -431,18 +429,6 @@ public class ReportService {
             }
         }
         return result;
-    }
-
-    private DayOfWeek parseDayOfWeek(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return DayOfWeek.valueOf(value.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
-            log.warn("Invalid week_off_day '{}'", value);
-            return null;
-        }
     }
 
     private Long requireCallerCompanyId() {

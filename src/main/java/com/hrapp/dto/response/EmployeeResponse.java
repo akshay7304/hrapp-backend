@@ -38,5 +38,8 @@ public class EmployeeResponse {
 
     private List<String> roles;
 
+    /** Profile photo URL when set; {@code null} if the employee has no photo. */
+    private String avatar;
+
     private LocalDateTime createdAt;
 }

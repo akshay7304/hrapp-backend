@@ -2,7 +2,6 @@ package com.hrapp.dto.request;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -12,6 +11,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalTime;
+import java.util.List;
 
 @Getter
 @Setter
@@ -42,7 +42,15 @@ public class CompanySettingsRequest {
     @Min(value = 0, message = "Late mark minutes cannot be negative")
     private Integer lateMarkAfterMinutes;
 
-    @NotBlank(message = "Week off day is required")
+    /**
+     * One or more week-off days, e.g. {@code ["SATURDAY","SUNDAY"]}.
+     * Preferred field for the web app.
+     */
+    private List<String> weekOffDays;
+
+    /**
+     * Legacy single-day field. Used only when {@link #weekOffDays} is null/empty.
+     */
     private String weekOffDay;
 
     /** Optional — manufacturer/protocol hint for the biometric device. */

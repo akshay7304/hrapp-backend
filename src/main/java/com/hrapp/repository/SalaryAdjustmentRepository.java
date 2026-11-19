@@ -24,6 +24,13 @@ public interface SalaryAdjustmentRepository extends JpaRepository<SalaryAdjustme
     @Query("SELECT sa FROM SalaryAdjustment sa " +
             "JOIN FETCH sa.user " +
             "JOIN FETCH sa.createdBy " +
+            "WHERE sa.user.id = :userId " +
+            "ORDER BY sa.year DESC, sa.month DESC, sa.createdAt DESC")
+    List<SalaryAdjustment> findByUserIdOrderByYearDescMonthDesc(@Param("userId") Long userId);
+
+    @Query("SELECT sa FROM SalaryAdjustment sa " +
+            "JOIN FETCH sa.user " +
+            "JOIN FETCH sa.createdBy " +
             "WHERE sa.company.id = :companyId AND sa.month = :month AND sa.year = :year " +
             "ORDER BY sa.createdAt ASC")
     List<SalaryAdjustment> findByCompanyIdAndMonthAndYear(

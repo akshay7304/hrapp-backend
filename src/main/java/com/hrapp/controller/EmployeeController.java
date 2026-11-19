@@ -6,7 +6,10 @@ import com.hrapp.dto.request.UpdateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeStatusRequest;
 import com.hrapp.dto.response.EmployeeResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.dto.response.SalaryAdjustmentResponse;
+import com.hrapp.dto.response.SalaryStructureResponse;
 import com.hrapp.service.EmployeeService;
+import com.hrapp.service.PayrollService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +27,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/employees")
 @RequiredArgsConstructor
@@ -31,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class EmployeeController {
 
     private final EmployeeService employeeService;
+    private final PayrollService payrollService;
 
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
@@ -45,10 +51,14 @@ public class EmployeeController {
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
     public ResponseEntity<ApiResponse<PageResponse<EmployeeResponse>>> getAllEmployees(
+            @RequestParam(required = false) Long departmentId,
+            @RequestParam(required = false) Long statusId,
+            @RequestParam(required = false) String search,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Pageable pageable = PageRequest.of(page, size);
-        PageResponse<EmployeeResponse> employees = employeeService.getAllEmployees(pageable);
+        PageResponse<EmployeeResponse> employees =
+                employeeService.getAllEmployees(departmentId, statusId, search, pageable);
         return ResponseEntity.ok(ApiResponse.success(employees, "Employees retrieved successfully"));
     }
 
@@ -68,6 +78,29 @@ public class EmployeeController {
     public ResponseEntity<ApiResponse<EmployeeResponse>> getEmployeeById(@PathVariable Long id) {
         EmployeeResponse response = employeeService.getEmployeeById(id);
         return ResponseEntity.ok(ApiResponse.success(response, "Employee retrieved successfully"));
+    }
+
+    /** FE employee-details alias — same data as {@code GET /payroll/salary-structure/{userId}}. */
+    @GetMapping("/{id}/salary-structure")
+    @PreAuthorize("hasAnyRole('ADMIN','HR')")
+    public ResponseEntity<ApiResponse<List<SalaryStructureResponse>>> getEmployeeSalaryStructure(
+            @PathVariable("id") Long id) {
+        List<SalaryStructureResponse> data = payrollService.getSalaryStructure(id);
+        return ResponseEntity.ok(ApiResponse.success(data, "Salary structures fetched successfully"));
+    }
+
+    /**
+     * FE employee-details alias. Pass {@code month}+{@code year} for one month,
+     * or omit both for the employee's full adjustment history.
+     */
+    @GetMapping("/{id}/adjustments")
+    @PreAuthorize("hasAnyRole('ADMIN','HR')")
+    public ResponseEntity<ApiResponse<List<SalaryAdjustmentResponse>>> getEmployeeAdjustments(
+            @PathVariable("id") Long id,
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) Integer year) {
+        List<SalaryAdjustmentResponse> data = payrollService.getAdjustments(id, month, year);
+        return ResponseEntity.ok(ApiResponse.success(data, "Adjustments fetched successfully"));
     }
 
     @PutMapping("/{id}")

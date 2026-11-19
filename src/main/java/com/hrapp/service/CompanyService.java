@@ -97,7 +97,9 @@ public class CompanyService {
     @Transactional
     public CompanyDetailResponse createCompany(CreateCompanyRequest request) {
         if (userRepository.existsByMobile(request.getAdminMobile())) {
-            throw new ConflictException("Mobile number is already registered");
+            throw new ConflictException(
+                    "Mobile number is already registered",
+                    Map.of("adminMobile", "Mobile number is already registered"));
         }
 
         Company company = companyRepository.save(Company.builder()

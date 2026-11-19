@@ -14,6 +14,9 @@ public interface LeaveBalanceRepository extends JpaRepository<LeaveBalance, Long
 
     Optional<LeaveBalance> findByUserIdAndLeaveTypeIdAndYear(Long userId, Long leaveTypeId, Integer year);
 
+    /** Used before deleting a leave type — block when employees still have balances. */
+    long countByLeaveTypeId(Long leaveTypeId);
+
     /**
      * Eagerly fetches {@code leaveType} so response DTOs can read its fields
      * without triggering N+1 lookups.

@@ -64,7 +64,8 @@ public class CompanySettings {
     @Column(name = "late_mark_after_minutes")
     private Integer lateMarkAfterMinutes;
 
-    @Column(name = "week_off_day", length = 20)
+    /** Comma-separated DayOfWeek names, e.g. {@code SATURDAY,SUNDAY}. */
+    @Column(name = "week_off_day", length = 100, nullable = false)
     private String weekOffDay;
 
     /**

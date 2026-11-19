@@ -69,11 +69,12 @@ public class EmployeeService {
         Long companyId = requireCallerCompanyId();
 
         if (userRepository.existsByMobile(request.getMobile())) {
-            throw new ConflictException("Mobile number is already registered");
+            throw new ConflictException(
+                    "Mobile number is already registered",
+                    Map.of("mobile", "Mobile number is already registered"));
         }
-        if (userRepository.existsByEmpCodeAndCompanyId(request.getEmpCode(), companyId)) {
-            throw new ConflictException("Employee code already exists in this company");
-        }
+
+        String empCode = resolveEmpCode(request.getEmpCode(), companyId);
 
         Department department = departmentRepository
                 .findByIdAndCompanyId(request.getDepartmentId(), companyId)
@@ -96,7 +97,7 @@ public class EmployeeService {
                 .department(department)
                 .designation(designation)
                 .status(activeStatus)
-                .empCode(request.getEmpCode())
+                .empCode(empCode)
                 .fullName(request.getFullName())
                 .mobile(request.getMobile())
                 .email(request.getEmail())
@@ -123,9 +124,12 @@ public class EmployeeService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<EmployeeResponse> getAllEmployees(Pageable pageable) {
+    public PageResponse<EmployeeResponse> getAllEmployees(
+            Long departmentId, Long statusId, String search, Pageable pageable) {
         Long companyId = requireCallerCompanyId();
-        Page<User> users = userRepository.findByCompanyId(companyId, pageable);
+        String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
+        Page<User> users = userRepository.searchByCompany(
+                companyId, departmentId, statusId, trimmedSearch, pageable);
         if (users.isEmpty()) {
             return PageResponse.from(users.map(u -> toResponse(u, Collections.emptyList())));
         }
@@ -248,7 +252,35 @@ public class EmployeeService {
                 .toList();
     }
 
+    /**
+     * Uses FE-supplied code when present; otherwise allocates the next free
+     * {@code EMPnnn} within the company.
+     */
+    private String resolveEmpCode(String requested, Long companyId) {
+        if (requested != null && !requested.isBlank()) {
+            String code = requested.trim();
+            if (userRepository.existsByEmpCodeAndCompanyId(code, companyId)) {
+                throw new ConflictException(
+                        "Employee code already exists in this company",
+                        Map.of("empCode", "Employee code already exists in this company"));
+            }
+            return code;
+        }
+        long base = userRepository.countByCompanyId(companyId) + 1;
+        for (long n = base; n < base + 10_000; n++) {
+            String code = String.format("EMP%03d", n);
+            if (!userRepository.existsByEmpCodeAndCompanyId(code, companyId)) {
+                return code;
+            }
+        }
+        throw new ConflictException("Unable to allocate a unique employee code");
+    }
+
     private EmployeeResponse toResponse(User user, List<String> roles) {
+        String avatar = user.getProfilePicUrl();
+        if (avatar != null && avatar.isBlank()) {
+            avatar = null;
+        }
         return EmployeeResponse.builder()
                 .id(user.getId())
                 .empCode(user.getEmpCode())
@@ -265,6 +297,7 @@ public class EmployeeService {
                 .statusName(user.getStatus() != null ? user.getStatus().getName() : null)
                 .companyId(user.getCompany() != null ? user.getCompany().getId() : null)
                 .roles(roles != null ? roles : new ArrayList<>())
+                .avatar(avatar)
                 .createdAt(user.getCreatedAt())
                 .build();
     }

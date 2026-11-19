@@ -48,7 +48,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.HashMap;
@@ -178,7 +177,17 @@ public class PayrollService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
         ensureSameCompany(user, companyId);
-        return salaryAdjustmentRepository.findByUserIdAndMonthAndYear(userId, month, year).stream()
+        boolean hasMonth = month != null;
+        boolean hasYear = year != null;
+        if (hasMonth != hasYear) {
+            throw new BadRequestException("Provide both month and year, or omit both");
+        }
+        if (hasMonth) {
+            return salaryAdjustmentRepository.findByUserIdAndMonthAndYear(userId, month, year).stream()
+                    .map(this::toAdjustmentResponse)
+                    .toList();
+        }
+        return salaryAdjustmentRepository.findByUserIdOrderByYearDescMonthDesc(userId).stream()
                 .map(this::toAdjustmentResponse)
                 .toList();
     }
@@ -407,7 +416,6 @@ public class PayrollService {
         LocalDate monthStart = ym.atDay(1);
         LocalDate monthEnd = ym.atEndOfMonth();
 
-        DayOfWeek weekOff = parseDayOfWeek(settings.getWeekOffDay());
         Set<LocalDate> holidays = holidayRepository
                 .findByCompanyIdAndHolidayDateBetween(companyId, monthStart, monthEnd).stream()
                 .map(Holiday::getHolidayDate)
@@ -416,7 +424,7 @@ public class PayrollService {
         int workingDays = 0;
         LocalDate cursor = monthStart;
         while (!cursor.isAfter(monthEnd)) {
-            boolean skip = (weekOff != null && cursor.getDayOfWeek() == weekOff)
+            boolean skip = com.hrapp.util.WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay())
                     || holidays.contains(cursor);
             if (!skip) {
                 workingDays++;
@@ -603,18 +611,6 @@ public class PayrollService {
             throw new BadRequestException("Adjustment type must be ADDITION or DEDUCTION");
         }
         return upper;
-    }
-
-    private DayOfWeek parseDayOfWeek(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return DayOfWeek.valueOf(value.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ex) {
-            log.warn("Invalid week_off_day '{}'", value);
-            return null;
-        }
     }
 
     private Long requireCallerUserId() {

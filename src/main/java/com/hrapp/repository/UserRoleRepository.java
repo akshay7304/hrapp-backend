@@ -25,4 +25,8 @@ public interface UserRoleRepository extends JpaRepository<UserRole, Long> {
      */
     @Query("SELECT ur FROM UserRole ur JOIN FETCH ur.role WHERE ur.user.id IN :userIds")
     List<UserRole> findByUserIdIn(@Param("userIds") Collection<Long> userIds);
+
+    void deleteByUser_Id(Long userId);
+
+    boolean existsByUser_IdAndRole_Name(Long userId, String roleName);
 }

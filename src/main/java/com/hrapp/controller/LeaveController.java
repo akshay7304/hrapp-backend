@@ -6,6 +6,7 @@ import com.hrapp.dto.request.ApplyLeaveRequest;
 import com.hrapp.dto.response.LeaveBalanceResponse;
 import com.hrapp.dto.response.LeaveRequestResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.enums.LeaveRequestStatus;
 import com.hrapp.service.LeaveService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -65,8 +66,12 @@ public class LeaveController {
         return ResponseEntity.ok(ApiResponse.success(data, "Leave balances initialized successfully"));
     }
 
+    /**
+     * Any company staff member can apply for their own leave (ADMIN/HR included).
+     * Self-approval is still blocked on the action endpoint / pending queue.
+     */
     @PostMapping("/apply")
-    @PreAuthorize("hasRole('EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
     public ResponseEntity<ApiResponse<LeaveRequestResponse>> applyLeave(
             @Valid @RequestBody ApplyLeaveRequest request) {
         LeaveRequestResponse data = leaveService.applyLeave(request);
@@ -83,15 +88,33 @@ public class LeaveController {
         return ResponseEntity.ok(ApiResponse.success(data, "Leave action recorded successfully"));
     }
 
+    /**
+     * Authenticated user's own leave history (any role). Pass {@code year} only
+     * for full-year history; include {@code month} to narrow to one month.
+     */
     @GetMapping("/my")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
     public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getMyLeaveRequests(
-            @RequestParam Integer month,
+            @RequestParam(required = false) Integer month,
             @RequestParam Integer year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Pageable pageable = PageRequest.of(page, size);
         PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave requests fetched successfully"));
+    }
+
+    /** Web-app alias for personal leave history — same data as {@code GET /leaves/my}. */
+    @GetMapping("/history")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
+    public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getMyLeaveHistory(
+            @RequestParam(required = false) Integer month,
+            @RequestParam Integer year,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, pageable);
+        return ResponseEntity.ok(ApiResponse.success(data, "Leave history fetched successfully"));
     }
 
     @GetMapping("/pending")
@@ -109,15 +132,18 @@ public class LeaveController {
     public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getCompanyLeaveRequests(
             @RequestParam Integer month,
             @RequestParam Integer year,
+            @RequestParam(required = false) LeaveRequestStatus status,
+            @RequestParam(required = false) Long employeeId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Pageable pageable = PageRequest.of(page, size);
-        PageResponse<LeaveRequestResponse> data = leaveService.getCompanyLeaveRequests(month, year, pageable);
+        PageResponse<LeaveRequestResponse> data =
+                leaveService.getCompanyLeaveRequests(month, year, status, employeeId, pageable);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave requests fetched successfully"));
     }
 
     @DeleteMapping("/{id}/cancel")
-    @PreAuthorize("hasRole('EMPLOYEE')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR','EMPLOYEE')")
     public ResponseEntity<ApiResponse<LeaveRequestResponse>> cancelLeave(@PathVariable("id") Long id) {
         LeaveRequestResponse data = leaveService.cancelLeave(id);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave cancelled successfully"));

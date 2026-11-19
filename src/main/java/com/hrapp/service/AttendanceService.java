@@ -390,16 +390,7 @@ public class AttendanceService {
     }
 
     private boolean isWeekOff(LocalDate date, String weekOffDay) {
-        if (weekOffDay == null || weekOffDay.isBlank()) {
-            return false;
-        }
-        try {
-            DayOfWeek configured = DayOfWeek.valueOf(weekOffDay.trim().toUpperCase());
-            return date.getDayOfWeek() == configured;
-        } catch (IllegalArgumentException ex) {
-            log.warn("Invalid week-off day configured: '{}'", weekOffDay);
-            return false;
-        }
+        return com.hrapp.util.WeekOffSupport.isWeekOff(date, weekOffDay);
     }
 
     private Optional<AttendancePunch> getLastPunch(Long attendanceId) {

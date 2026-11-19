@@ -26,7 +26,10 @@ public class CreateEmployeeRequest {
     @NotNull(message = "Designation is required")
     private Long designationId;
 
-    @NotBlank(message = "Employee code is required")
+    /**
+     * Optional — when blank/null the backend auto-generates a company-unique
+     * code (e.g. {@code EMP001}). FE should display the value from the create response.
+     */
     private String empCode;
 
     @NotBlank(message = "Full name is required")

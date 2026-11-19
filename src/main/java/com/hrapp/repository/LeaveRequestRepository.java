@@ -61,6 +61,14 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
     Page<LeaveRequest> findByUser_CompanyIdAndStatus(
             Long companyId, LeaveRequestStatus status, Pageable pageable);
 
+    /**
+     * Pending queue for ADMIN/HR excluding the caller's own requests so they
+     * never see (or are tempted to action) their own leave in the approval list.
+     */
+    @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
+    Page<LeaveRequest> findByUser_CompanyIdAndStatusAndUser_IdNot(
+            Long companyId, LeaveRequestStatus status, Long excludeUserId, Pageable pageable);
+
     /** Pending-queue size for the ops dashboard badge. */
     long countByUser_CompanyIdAndStatus(Long companyId, LeaveRequestStatus status);
 
@@ -78,6 +86,20 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
     @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
     Page<LeaveRequest> findByUser_CompanyIdAndFromDateBetween(
             Long companyId, LocalDate fromDate, LocalDate toDate, Pageable pageable);
+
+    /** Company leaves in a date window with optional status / employee filters. */
+    @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
+    @Query("SELECT lr FROM LeaveRequest lr WHERE lr.user.company.id = :companyId "
+            + "AND lr.fromDate BETWEEN :fromDate AND :toDate "
+            + "AND (:status IS NULL OR lr.status = :status) "
+            + "AND (:employeeId IS NULL OR lr.user.id = :employeeId)")
+    Page<LeaveRequest> findCompanyFiltered(
+            @Param("companyId") Long companyId,
+            @Param("fromDate") LocalDate fromDate,
+            @Param("toDate") LocalDate toDate,
+            @Param("status") LeaveRequestStatus status,
+            @Param("employeeId") Long employeeId,
+            Pageable pageable);
 
     /**
      * Returns true when the user already has a leave request whose date range

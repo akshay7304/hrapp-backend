@@ -5,13 +5,17 @@ import com.hrapp.dto.response.CompanySettingsResponse;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
+import com.hrapp.exception.BadRequestException;
 import com.hrapp.repository.CompanyRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 /**
  * Reads/updates per-company attendance configuration. SUPERADMIN can target
@@ -49,13 +53,33 @@ public class CompanySettingsService {
         settings.setHalfDayHours(request.getHalfDayHours());
         settings.setOvertimeAfterHours(request.getOvertimeAfterHours());
         settings.setLateMarkAfterMinutes(request.getLateMarkAfterMinutes());
-        settings.setWeekOffDay(request.getWeekOffDay());
-        settings.setDeviceBrand(request.getDeviceBrand());
-        settings.setDeviceSecret(request.getDeviceSecret());
+        settings.setWeekOffDay(resolveWeekOffStorage(request));
+        // Device columns are NOT NULL in DB. Only overwrite when the client
+        // sends a value; if the stored row is somehow null, fall back to defaults.
+        if (request.getDeviceBrand() != null && !request.getDeviceBrand().isBlank()) {
+            settings.setDeviceBrand(request.getDeviceBrand().trim());
+        } else if (settings.getDeviceBrand() == null || settings.getDeviceBrand().isBlank()) {
+            settings.setDeviceBrand("ZKTECO");
+        }
+        if (request.getDeviceSecret() != null && !request.getDeviceSecret().isBlank()) {
+            settings.setDeviceSecret(request.getDeviceSecret().trim());
+        } else if (settings.getDeviceSecret() == null || settings.getDeviceSecret().isBlank()) {
+            settings.setDeviceSecret("hrapp-device-secret-2026");
+        }
 
         settings = companySettingsRepository.save(settings);
         log.info("Updated company settings for company={}", effectiveCompanyId);
         return toResponse(settings);
+    }
+
+    private String resolveWeekOffStorage(CompanySettingsRequest request) {
+        if (request.getWeekOffDays() != null && !request.getWeekOffDays().isEmpty()) {
+            return WeekOffSupport.toStorage(request.getWeekOffDays());
+        }
+        if (request.getWeekOffDay() != null && !request.getWeekOffDay().isBlank()) {
+            return WeekOffSupport.toStorage(List.of(request.getWeekOffDay().trim()));
+        }
+        throw new BadRequestException("weekOffDays (or legacy weekOffDay) is required");
     }
 
     private Long resolveCompanyId(Long pathCompanyId) {
@@ -82,10 +106,16 @@ public class CompanySettingsService {
                 .halfDayHours(settings.getHalfDayHours())
                 .overtimeAfterHours(settings.getOvertimeAfterHours())
                 .lateMarkAfterMinutes(settings.getLateMarkAfterMinutes())
-                .weekOffDay(settings.getWeekOffDay())
+                .weekOffDays(WeekOffSupport.toApiList(settings.getWeekOffDay()))
+                .weekOffDay(firstWeekOff(settings.getWeekOffDay()))
                 .deviceBrand(settings.getDeviceBrand())
                 .deviceSecret(settings.getDeviceSecret())
                 .updatedAt(settings.getUpdatedAt())
                 .build();
+    }
+
+    private static String firstWeekOff(String stored) {
+        List<String> days = WeekOffSupport.toApiList(stored);
+        return days.isEmpty() ? null : days.get(0);
     }
 }
