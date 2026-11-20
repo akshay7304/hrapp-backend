@@ -53,10 +53,10 @@ public class SalaryAdjustment {
     @JoinColumn(name = "company_id", nullable = false)
     private Company company;
 
-    @Column(name = "month", nullable = false, columnDefinition = "TINYINT")
+    @Column(name = "month", nullable = false)
     private Integer month;
 
-    @Column(name = "year", nullable = false, columnDefinition = "SMALLINT")
+    @Column(name = "year", nullable = false)
     private Integer year;
 
     @Column(name = "type", nullable = false, length = 20)
@@ -65,7 +65,7 @@ public class SalaryAdjustment {
     @Column(name = "amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal amount;
 
-    @Column(name = "reason", nullable = false, columnDefinition = "TEXT")
+    @Column(name = "reason", nullable = false, length = 255)
     private String reason;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

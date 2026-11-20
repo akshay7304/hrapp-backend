@@ -54,10 +54,10 @@ public class SalaryPayment {
     @JoinColumn(name = "salary_structure_id", nullable = false)
     private SalaryStructure salaryStructure;
 
-    @Column(name = "month", nullable = false, columnDefinition = "TINYINT")
+    @Column(name = "month", nullable = false)
     private Integer month;
 
-    @Column(name = "year", nullable = false, columnDefinition = "SMALLINT")
+    @Column(name = "year", nullable = false)
     private Integer year;
 
     @Column(name = "working_days", nullable = false)
@@ -108,8 +108,7 @@ public class SalaryPayment {
     private BigDecimal netSalary = BigDecimal.ZERO;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false,
-            columnDefinition = "ENUM('DRAFT','PAID') DEFAULT 'DRAFT'")
+    @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
     private PaymentStatus status = PaymentStatus.DRAFT;
 
@@ -119,7 +118,7 @@ public class SalaryPayment {
     @Column(name = "payslip_url", length = 255)
     private String payslipUrl;
 
-    @Column(name = "remarks", columnDefinition = "TEXT")
+    @Column(name = "remarks", columnDefinition = "text")
     private String remarks;
 
     @ManyToOne(fetch = FetchType.LAZY)

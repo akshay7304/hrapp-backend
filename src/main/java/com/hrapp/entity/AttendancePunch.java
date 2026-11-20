@@ -53,13 +53,11 @@ public class AttendancePunch {
     private LocalDateTime punchTime;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "punch_type", nullable = false,
-            columnDefinition = "ENUM('IN','OUT')")
+    @Column(name = "punch_type", nullable = false, length = 10)
     private PunchType punchType;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "source", nullable = false,
-            columnDefinition = "ENUM('MOBILE','THUMB','MANUAL','WEB')")
+    @Column(name = "source", nullable = false, length = 20)
     private AttendanceSource source;
 
     @CreationTimestamp

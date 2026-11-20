@@ -83,7 +83,7 @@ public class User {
     private String passwordHash;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "salary_type", columnDefinition = "ENUM('MONTHLY','DAILY','HOURLY') DEFAULT 'MONTHLY'")
+    @Column(name = "salary_type", length = 20)
     @Builder.Default
     private SalaryType salaryType = SalaryType.MONTHLY;
 

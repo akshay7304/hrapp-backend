@@ -57,7 +57,7 @@ public class LeaveRequest {
     @Column(name = "total_days", nullable = false, precision = 5, scale = 1)
     private BigDecimal totalDays;
 
-    @Column(name = "reason", columnDefinition = "TEXT")
+    @Column(name = "reason", columnDefinition = "text")
     private String reason;
 
     @Column(name = "is_half_day", nullable = false)
@@ -72,8 +72,7 @@ public class LeaveRequest {
     private String halfDayType;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false,
-            columnDefinition = "ENUM('PENDING','APPROVED','REJECTED') DEFAULT 'PENDING'")
+    @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
     private LeaveRequestStatus status = LeaveRequestStatus.PENDING;
 
@@ -81,7 +80,7 @@ public class LeaveRequest {
     @JoinColumn(name = "actioned_by")
     private User actionedBy;
 
-    @Column(name = "reject_reason", columnDefinition = "TEXT")
+    @Column(name = "reject_reason", columnDefinition = "text")
     private String rejectReason;
 
     @CreationTimestamp

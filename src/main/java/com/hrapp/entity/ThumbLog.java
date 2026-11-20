@@ -49,8 +49,7 @@ public class ThumbLog {
     private LocalDateTime punchTime;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "punch_type", nullable = false,
-            columnDefinition = "ENUM('IN','OUT')")
+    @Column(name = "punch_type", nullable = false, length = 10)
     private PunchType punchType;
 
     @Column(name = "is_processed", nullable = false)

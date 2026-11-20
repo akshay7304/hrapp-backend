@@ -1,11 +1,11 @@
 # ─────────────────────────────────────────────
 #  .cursorrules — HR App Backend
-#  Java 17 + Spring Boot 3 + MySQL
+#  Java 17 + Spring Boot 3 + PostgreSQL (Supabase)
 # ─────────────────────────────────────────────
 
 ## Project overview
 This is a multi-tenant HR management SaaS application.
-Backend: Java 17, Spring Boot 3.5.15, Spring Security, Spring Data JPA, MySQL 8.
+Backend: Java 17, Spring Boot 3.5.15, Spring Security, Spring Data JPA, PostgreSQL (Supabase).
 Auth: JWT token-based authentication.
 Architecture: REST API consumed by a React Native mobile app.
 

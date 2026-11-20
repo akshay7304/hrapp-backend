@@ -46,23 +46,22 @@ public class Advance {
     @Column(name = "amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal amount;
 
-    @Column(name = "reason", columnDefinition = "TEXT")
+    @Column(name = "reason", columnDefinition = "text")
     private String reason;
 
     /** Set on reject/cancel; original {@link #reason} is preserved. */
-    @Column(name = "reject_reason", columnDefinition = "TEXT")
+    @Column(name = "reject_reason", columnDefinition = "text")
     private String rejectReason;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false,
-            columnDefinition = "ENUM('PENDING','APPROVED','REJECTED') DEFAULT 'PENDING'")
+    @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
     private AdvanceStatus status = AdvanceStatus.PENDING;
 
-    @Column(name = "deduct_from_month", columnDefinition = "TINYINT")
+    @Column(name = "deduct_from_month")
     private Integer deductFromMonth;
 
-    @Column(name = "deduct_from_year", columnDefinition = "SMALLINT")
+    @Column(name = "deduct_from_year")
     private Integer deductFromYear;
 
     @Column(name = "is_recovered", nullable = false)

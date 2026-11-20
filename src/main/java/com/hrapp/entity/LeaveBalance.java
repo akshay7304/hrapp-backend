@@ -42,7 +42,7 @@ public class LeaveBalance {
     @JoinColumn(name = "leave_type_id", nullable = false)
     private LeaveType leaveType;
 
-    @Column(name = "year", nullable = false, columnDefinition = "YEAR")
+    @Column(name = "year", nullable = false)
     private Integer year;
 
     @Column(name = "total_days", nullable = false, precision = 5, scale = 1)

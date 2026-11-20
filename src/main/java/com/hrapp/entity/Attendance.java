@@ -72,14 +72,12 @@ public class Attendance {
     private BigDecimal overtimeHours = BigDecimal.ZERO;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false,
-            columnDefinition = "ENUM('PRESENT','ABSENT','HALF_DAY','ON_LEAVE','HOLIDAY','WEEK_OFF') DEFAULT 'ABSENT'")
+    @Column(name = "status", nullable = false, length = 20)
     @Builder.Default
     private AttendanceStatus status = AttendanceStatus.ABSENT;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "source", nullable = false,
-            columnDefinition = "ENUM('THUMB','MOBILE','MANUAL','WEB') DEFAULT 'MOBILE'")
+    @Column(name = "source", nullable = false, length = 20)
     @Builder.Default
     private AttendanceSource source = AttendanceSource.WEB;
 
@@ -91,7 +89,7 @@ public class Attendance {
     @Builder.Default
     private Boolean isAutoCheckout = false;
 
-    @Column(name = "manual_reason", columnDefinition = "TEXT")
+    @Column(name = "manual_reason", columnDefinition = "text")
     private String manualReason;
 
     @ManyToOne(fetch = FetchType.LAZY)
