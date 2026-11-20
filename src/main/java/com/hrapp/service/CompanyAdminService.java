@@ -14,6 +14,7 @@ import com.hrapp.repository.RoleRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.security.TokenRevocationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,6 +41,7 @@ public class CompanyAdminService {
     private final RoleRepository roleRepository;
     private final CompanyRepository companyRepository;
     private final EmployeeService employeeService;
+    private final TokenRevocationService tokenRevocationService;
 
     @Transactional(readOnly = true)
     public List<EmployeeResponse> listAdmins(Long companyId) {
@@ -66,6 +68,7 @@ public class CompanyAdminService {
         }
 
         replacePrimaryRole(user, ROLE_ADMIN);
+        tokenRevocationService.revokeAllForUser(user.getId());
         log.info("Assigned ADMIN to user={} company={}", user.getId(), effectiveCompanyId);
         return employeeService.getEmployeeById(user.getId());
     }
@@ -87,6 +90,7 @@ public class CompanyAdminService {
         }
 
         replacePrimaryRole(user, ROLE_EMPLOYEE);
+        tokenRevocationService.revokeAllForUser(user.getId());
         log.info("Revoked ADMIN from user={} company={} (downgraded to EMPLOYEE)",
                 user.getId(), effectiveCompanyId);
         return employeeService.getEmployeeById(user.getId());

@@ -299,13 +299,12 @@ public class CompanyService {
 
     private List<Holiday> seedHolidays(Company company) {
         int year = LocalDate.now().getYear();
+        // Only fixed Gregorian dates — lunar festivals (Holi, Diwali, Good Friday)
+        // move each year and must be set by the company, not hard-coded.
         List<HolidaySeed> seeds = List.of(
                 new HolidaySeed("Republic Day", LocalDate.of(year, 1, 26)),
-                new HolidaySeed("Holi", LocalDate.of(year, 3, 14)),
-                new HolidaySeed("Good Friday", LocalDate.of(year, 4, 18)),
                 new HolidaySeed("Independence Day", LocalDate.of(year, 8, 15)),
                 new HolidaySeed("Gandhi Jayanti", LocalDate.of(year, 10, 2)),
-                new HolidaySeed("Diwali", LocalDate.of(year, 10, 20)),
                 new HolidaySeed("Christmas", LocalDate.of(year, 12, 25))
         );
         List<Holiday> created = new ArrayList<>(seeds.size());

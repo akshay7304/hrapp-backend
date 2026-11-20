@@ -214,15 +214,21 @@ public class EmployeeService {
         if (request.getProfilePicUrl() != null) {
             user.setProfilePicUrl(blankToNull(request.getProfilePicUrl()));
         }
+        boolean roleChanged = false;
         if (request.getRoleId() != null) {
             Role role = roleRepository.findById(request.getRoleId())
                     .orElseThrow(() -> new ResourceNotFoundException("Role not found"));
             ensureCreatableRole(role);
             userRoleRepository.deleteByUser_Id(user.getId());
             userRoleRepository.save(UserRole.builder().user(user).role(role).build());
+            roleChanged = true;
         }
 
         user = userRepository.save(user);
+        if (roleChanged) {
+            // Roles are embedded in JWTs — revoke so the next request picks up the new role.
+            tokenRevocationService.revokeAllForUser(user.getId());
+        }
         log.info("Updated employee id={}", user.getId());
         return toResponse(user, fetchRoleNames(user.getId()), null);
     }

@@ -201,6 +201,15 @@ public class AttendanceService {
             }
 
             LocalDateTime checkOutTime = today.atTime(settings.getShiftEndTime());
+            LocalDateTime checkIn = attendance.getCheckIn();
+            // Someone who punched in at/after shift end cannot be closed at
+            // shift end — that would produce 0 (or negative) worked hours.
+            if (checkIn != null && !checkOutTime.isAfter(checkIn)) {
+                log.debug("Auto checkout skipped attendanceId={} — check-in {} is at/after shift end {}",
+                        attendance.getId(), checkIn, checkOutTime);
+                continue;
+            }
+
             User user = attendance.getUser();
 
             AttendancePunch punch = AttendancePunch.builder()

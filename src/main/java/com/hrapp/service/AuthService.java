@@ -64,25 +64,22 @@ public class AuthService {
                             + "Try again after 30 minutes.");
         }
 
-        User user = userRepository.findByMobile(mobile)
-                .orElseThrow(() -> {
-                    log.warn("Login failed — mobile not registered: {}", mobile);
-                    return new ResourceNotFoundException("User not found");
-                });
+        User user = userRepository.findByMobile(mobile).orElse(null);
+        if (user == null) {
+            // Same failure path as a wrong password so callers cannot tell
+            // whether the mobile is registered. Still counts toward lockout
+            // for this mobile key (harmless for unknown numbers).
+            log.warn("Login failed — mobile not registered: {}", mobile);
+            loginAttemptService.recordFailedAttempt(mobile);
+            throwInvalidCredentials(mobile);
+        }
 
         ensureLoginAllowed(user);
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             log.warn("Login failed — invalid password for mobile: {}", mobile);
             loginAttemptService.recordFailedAttempt(mobile);
-            int remaining = loginAttemptService.getRemainingAttempts(mobile);
-            if (remaining > 0) {
-                throw new UnauthorizedException(
-                        "Invalid mobile or password. " + remaining + " attempts remaining.");
-            }
-            throw new UnauthorizedException(
-                    "Account locked due to too many failed attempts. "
-                            + "Try again after 30 minutes.");
+            throwInvalidCredentials(mobile);
         }
 
         loginAttemptService.recordSuccessfulLogin(mobile);
@@ -111,6 +108,13 @@ public class AuthService {
         if (userId != null && !userId.equals(user.getId())) {
             log.warn("Refresh token user mismatch — token userId={}, db userId={}", userId, user.getId());
             throw new UnauthorizedException("Refresh token does not match user");
+        }
+
+        // Password change / status revoke must invalidate outstanding refresh
+        // tokens the same way the filter invalidates access tokens.
+        if (userId != null
+                && tokenRevocationService.isRevoked(userId, jwtUtil.extractIssuedAt(token))) {
+            throw new UnauthorizedException("Refresh token has been revoked");
         }
 
         ensureLoginAllowed(user);
@@ -149,6 +153,17 @@ public class AuthService {
         userRepository.save(user);
         tokenRevocationService.revokeAllForUser(userId);
         log.info("Password changed for userId={}", userId);
+    }
+
+    private void throwInvalidCredentials(String mobile) {
+        int remaining = loginAttemptService.getRemainingAttempts(mobile);
+        if (remaining > 0) {
+            throw new UnauthorizedException(
+                    "Invalid mobile or password. " + remaining + " attempts remaining.");
+        }
+        throw new UnauthorizedException(
+                "Account temporarily locked due to too many failed attempts. "
+                        + "Try again after 30 minutes.");
     }
 
     private void ensureLoginAllowed(User user) {

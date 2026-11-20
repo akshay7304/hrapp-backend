@@ -6,6 +6,7 @@ import com.hrapp.dto.request.ZktecoLogRequest;
 import com.hrapp.dto.response.ThumbLogResponse;
 import com.hrapp.dto.response.ThumbProcessResult;
 import com.hrapp.entity.Attendance;
+import com.hrapp.entity.AttendancePunch;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.ThumbLog;
@@ -15,6 +16,7 @@ import com.hrapp.enums.AttendanceStatus;
 import com.hrapp.enums.PunchType;
 import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.UnauthorizedException;
+import com.hrapp.repository.AttendancePunchRepository;
 import com.hrapp.repository.AttendanceRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.ThumbLogRepository;
@@ -23,7 +25,9 @@ import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -71,6 +75,8 @@ public class ThumbScannerService {
     private final UserRepository userRepository;
     private final CompanySettingsRepository companySettingsRepository;
     private final AttendanceRepository attendanceRepository;
+    private final AttendancePunchRepository attendancePunchRepository;
+    private final PlatformTransactionManager transactionManager;
     @SuppressWarnings("unused") // wired per spec for future holiday-aware overrides
     private final com.hrapp.repository.HolidayRepository holidayRepository;
 
@@ -144,11 +150,11 @@ public class ThumbScannerService {
 
     /**
      * Drains the unprocessed punch queue for {@code companyId} into
-     * {@code attendance} rows. Each call is atomic per (user, date) group:
-     * if any single group blows up, the rest still get processed and the
-     * failures are returned in {@link ThumbProcessResult#getErrors()}.
+     * {@code attendance} (+ {@code attendance_punches}) rows.
+     * <p>
+     * Each (user, date) group runs in its own transaction so a persistence
+     * failure marks only that group as failed — not the whole batch.
      */
-    @Transactional
     public ThumbProcessResult processThumbLogs(Long companyId) {
         List<ThumbLog> pending = thumbLogRepository
                 .findByCompanyIdAndIsProcessedFalseOrderBySyncedAtAsc(companyId);
@@ -164,6 +170,8 @@ public class ThumbScannerService {
 
         CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
                 .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
 
         int total = pending.size();
         int successCount = 0;
@@ -222,10 +230,14 @@ public class ThumbScannerService {
                     continue;
                 }
 
+                final ThumbLog firstInFinal = firstIn;
+                final ThumbLog lastOutFinal = lastOut;
                 try {
-                    upsertAttendance(user, company, date, firstIn, lastOut, settings);
-                    dateLogs.forEach(l -> l.setIsProcessed(true));
-                    thumbLogRepository.saveAll(dateLogs);
+                    tx.executeWithoutResult(status -> {
+                        upsertAttendance(user, company, date, firstInFinal, lastOutFinal, settings);
+                        dateLogs.forEach(l -> l.setIsProcessed(true));
+                        thumbLogRepository.saveAll(dateLogs);
+                    });
                     successCount += dateLogs.size();
                 } catch (Exception ex) {
                     errorCount += dateLogs.size();
@@ -396,7 +408,29 @@ public class ThumbScannerService {
             attendance.setStatus(deriveStatus(worked, settings));
         }
 
-        attendanceRepository.save(attendance);
+        attendance = attendanceRepository.save(attendance);
+        ensurePunch(attendance, user, firstIn.getPunchTime(), PunchType.IN);
+        if (lastOut != null) {
+            ensurePunch(attendance, user, lastOut.getPunchTime(), PunchType.OUT);
+        }
+    }
+
+    private void ensurePunch(Attendance attendance, User user,
+                             LocalDateTime punchTime, PunchType punchType) {
+        boolean exists = attendancePunchRepository
+                .findByAttendanceId(attendance.getId()).stream()
+                .anyMatch(p -> p.getPunchType() == punchType
+                        && p.getPunchTime().equals(punchTime));
+        if (exists) {
+            return;
+        }
+        attendancePunchRepository.save(AttendancePunch.builder()
+                .attendance(attendance)
+                .user(user)
+                .punchTime(punchTime)
+                .punchType(punchType)
+                .source(AttendanceSource.THUMB)
+                .build());
     }
 
     private BigDecimal calculateHours(LocalDateTime from, LocalDateTime to) {

@@ -176,6 +176,10 @@ public class LeaveService {
         if (request.getToDate().isBefore(request.getFromDate())) {
             throw new BadRequestException("To date cannot be before from date");
         }
+        if (request.getFromDate().getYear() != request.getToDate().getYear()) {
+            throw new BadRequestException(
+                    "Leave cannot span calendar years — submit separate requests per year");
+        }
 
         boolean isHalfDay = Boolean.TRUE.equals(request.getIsHalfDay());
         if (isHalfDay) {
@@ -209,12 +213,15 @@ public class LeaveService {
             throw new ConflictException("You already have a leave request for these dates");
         }
 
-        int year = request.getFromDate().getYear();
-        LeaveBalance balance = leaveBalanceRepository
-                .findByUserIdAndLeaveTypeIdAndYear(userId, leaveType.getId(), year)
-                .orElseThrow(() -> new BadRequestException("Leave balance not initialized"));
-        if (balance.getRemainingDays().compareTo(totalDays) < 0) {
-            throw new BadRequestException("Insufficient leave balance");
+        // Unpaid leave has quota 0 by design — skip balance enforcement.
+        if (Boolean.TRUE.equals(leaveType.getIsPaid())) {
+            int year = request.getFromDate().getYear();
+            LeaveBalance balance = leaveBalanceRepository
+                    .findByUserIdAndLeaveTypeIdAndYear(userId, leaveType.getId(), year)
+                    .orElseThrow(() -> new BadRequestException("Leave balance not initialized"));
+            if (balance.getRemainingDays().compareTo(totalDays) < 0) {
+                throw new BadRequestException("Insufficient leave balance");
+            }
         }
 
         LeaveRequest leaveRequest = LeaveRequest.builder()
@@ -268,17 +275,20 @@ public class LeaveService {
             List<LocalDate> holidayDates = fetchHolidayDates(
                     companyId, leaveRequest.getFromDate(), leaveRequest.getToDate());
 
-            int year = leaveRequest.getFromDate().getYear();
-            LeaveBalance balance = leaveBalanceRepository
-                    .findByUserIdAndLeaveTypeIdAndYear(
-                            leaveRequest.getUser().getId(), leaveRequest.getLeaveType().getId(), year)
-                    .orElseThrow(() -> new BadRequestException("Leave balance not initialized"));
-            if (balance.getRemainingDays().compareTo(leaveRequest.getTotalDays()) < 0) {
-                throw new BadRequestException("Insufficient leave balance to approve");
+            LeaveType leaveType = leaveRequest.getLeaveType();
+            if (Boolean.TRUE.equals(leaveType.getIsPaid())) {
+                int year = leaveRequest.getFromDate().getYear();
+                LeaveBalance balance = leaveBalanceRepository
+                        .findByUserIdAndLeaveTypeIdAndYear(
+                                leaveRequest.getUser().getId(), leaveType.getId(), year)
+                        .orElseThrow(() -> new BadRequestException("Leave balance not initialized"));
+                if (balance.getRemainingDays().compareTo(leaveRequest.getTotalDays()) < 0) {
+                    throw new BadRequestException("Insufficient leave balance to approve");
+                }
+                balance.setRemainingDays(balance.getRemainingDays().subtract(leaveRequest.getTotalDays()));
+                balance.setUsedDays(balance.getUsedDays().add(leaveRequest.getTotalDays()));
+                leaveBalanceRepository.save(balance);
             }
-            balance.setRemainingDays(balance.getRemainingDays().subtract(leaveRequest.getTotalDays()));
-            balance.setUsedDays(balance.getUsedDays().add(leaveRequest.getTotalDays()));
-            leaveBalanceRepository.save(balance);
 
             autoUpdateAttendance(
                     leaveRequest.getUser(),
@@ -329,18 +339,23 @@ public class LeaveService {
         }
 
         if (status == LeaveRequestStatus.APPROVED) {
-            int year = leaveRequest.getFromDate().getYear();
-            LeaveBalance balance = leaveBalanceRepository
-                    .findByUserIdAndLeaveTypeIdAndYear(
-                            leaveRequest.getUser().getId(),
-                            leaveRequest.getLeaveType().getId(),
-                            year)
-                    .orElse(null);
-            if (balance != null) {
-                balance.setRemainingDays(balance.getRemainingDays().add(leaveRequest.getTotalDays()));
-                BigDecimal newUsed = balance.getUsedDays().subtract(leaveRequest.getTotalDays());
-                balance.setUsedDays(newUsed.signum() < 0 ? BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP) : newUsed);
-                leaveBalanceRepository.save(balance);
+            LeaveType leaveType = leaveRequest.getLeaveType();
+            if (Boolean.TRUE.equals(leaveType.getIsPaid())) {
+                int year = leaveRequest.getFromDate().getYear();
+                LeaveBalance balance = leaveBalanceRepository
+                        .findByUserIdAndLeaveTypeIdAndYear(
+                                leaveRequest.getUser().getId(),
+                                leaveType.getId(),
+                                year)
+                        .orElse(null);
+                if (balance != null) {
+                    balance.setRemainingDays(balance.getRemainingDays().add(leaveRequest.getTotalDays()));
+                    BigDecimal newUsed = balance.getUsedDays().subtract(leaveRequest.getTotalDays());
+                    balance.setUsedDays(newUsed.signum() < 0
+                            ? BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP)
+                            : newUsed);
+                    leaveBalanceRepository.save(balance);
+                }
             }
             restoreAttendance(
                     leaveRequest.getUser().getId(),
