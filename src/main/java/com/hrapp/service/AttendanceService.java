@@ -22,6 +22,7 @@ import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.HolidayRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.util.AttendanceDuration;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -31,12 +32,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -45,7 +43,8 @@ import java.util.Optional;
 /**
  * Daily attendance with multiple IN/OUT punches per day.
  * Employee may check out at any time; after checkout they can check in again.
- * {@code workedHours} sums all paired IN→OUT durations (gaps between OUT and next IN are excluded).
+ * Worked time is the exact second-count of paired IN→OUT durations (gaps excluded),
+ * returned as {@code HH:MM:SS}. A span of 08:29:57 is stored as 30597 seconds.
  */
 @Service
 @RequiredArgsConstructor
@@ -171,14 +170,11 @@ public class AttendanceService {
 
         List<AttendancePunch> punches = new ArrayList<>(existingPunches);
         punches.add(punch);
-        BigDecimal worked = calculateWorkedHours(punches);
-        attendance.setWorkedHours(worked);
-        attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
-        attendance.setStatus(deriveStatus(worked, settings));
+        applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), settings);
 
         attendance = attendanceRepository.save(attendance);
-        log.info("Check-out user={} date={} worked={}h status={}",
-                userId, today, worked, attendance.getStatus());
+        log.info("Check-out user={} date={} worked={} status={}",
+                userId, today, attendance.getWorkedSeconds(), attendance.getStatus());
         return toResponse(attendance, punches);
     }
 
@@ -234,10 +230,7 @@ public class AttendanceService {
 
             List<AttendancePunch> punches = attendancePunchRepository
                     .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
-            BigDecimal worked = calculateWorkedHours(punches);
-            attendance.setWorkedHours(worked);
-            attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
-            attendance.setStatus(deriveStatus(worked, settings));
+            applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), settings);
 
             attendanceRepository.save(attendance);
             processed++;
@@ -357,12 +350,13 @@ public class AttendanceService {
 
             List<AttendancePunch> punches = attendancePunchRepository
                     .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
-            BigDecimal worked = calculateWorkedHours(punches);
-            attendance.setWorkedHours(worked);
-            attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
+            applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), settings);
+            attendance.setStatus(request.getStatus());
         } else {
             attendance.setWorkedHours(BigDecimal.ZERO);
             attendance.setOvertimeHours(BigDecimal.ZERO);
+            attendance.setWorkedSeconds(0L);
+            attendance.setOvertimeSeconds(0L);
             if (attendance.getId() != null) {
                 attendancePunchRepository.deleteByAttendanceId(attendance.getId());
             }
@@ -431,22 +425,30 @@ public class AttendanceService {
         return lastPunch.get().getPunchType() == PunchType.IN;
     }
 
-    private BigDecimal calculateWorkedHours(List<AttendancePunch> punches) {
-        List<AttendancePunch> sorted = punches.stream()
-                .sorted(Comparator.comparing(AttendancePunch::getPunchTime))
-                .toList();
+    private void applyDuration(Attendance attendance, long workedSeconds, CompanySettings settings) {
+        long overtimeSeconds = AttendanceDuration.overtimeSeconds(
+                workedSeconds, settings.getOvertimeAfterHours());
+        attendance.setWorkedSeconds(workedSeconds);
+        attendance.setOvertimeSeconds(overtimeSeconds);
+        attendance.setWorkedHours(AttendanceDuration.toPayrollHours(workedSeconds));
+        attendance.setOvertimeHours(AttendanceDuration.toPayrollHours(overtimeSeconds));
+        attendance.setStatus(AttendanceDuration.deriveStatus(
+                workedSeconds, settings.getShiftHours(), settings.getHalfDayHours()));
+    }
 
-        BigDecimal total = BigDecimal.ZERO;
-        LocalDateTime openIn = null;
-        for (AttendancePunch punch : sorted) {
-            if (punch.getPunchType() == PunchType.IN) {
-                openIn = punch.getPunchTime();
-            } else if (punch.getPunchType() == PunchType.OUT && openIn != null) {
-                total = total.add(calculateHours(openIn, punch.getPunchTime()));
-                openIn = null;
-            }
+    private long overtimeFromSettings(Attendance attendance, long workedSeconds) {
+        Long companyId = attendance.getCompany() != null ? attendance.getCompany().getId() : null;
+        if (companyId == null) {
+            return safeSeconds(attendance.getOvertimeSeconds());
         }
-        return total.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal threshold = companySettingsRepository.findByCompanyId(companyId)
+                .map(CompanySettings::getOvertimeAfterHours)
+                .orElse(null);
+        return AttendanceDuration.overtimeSeconds(workedSeconds, threshold);
+    }
+
+    private long safeSeconds(Long seconds) {
+        return seconds == null ? 0L : Math.max(seconds, 0L);
     }
 
     private int countCompleteSessions(List<AttendancePunch> punches) {
@@ -475,36 +477,6 @@ public class AttendanceService {
         return last.getPunchType() == PunchType.IN;
     }
 
-    private BigDecimal calculateHours(LocalDateTime from, LocalDateTime to) {
-        long minutes = ChronoUnit.MINUTES.between(from, to);
-        if (minutes < 0) {
-            minutes = 0;
-        }
-        return BigDecimal.valueOf(minutes)
-                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateOvertime(BigDecimal worked, BigDecimal threshold) {
-        if (worked == null || threshold == null) {
-            return BigDecimal.ZERO;
-        }
-        return worked.compareTo(threshold) > 0
-                ? worked.subtract(threshold).setScale(2, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-    }
-
-    private AttendanceStatus deriveStatus(BigDecimal worked, CompanySettings settings) {
-        BigDecimal shiftHours = settings.getShiftHours();
-        BigDecimal halfDayHours = settings.getHalfDayHours();
-        if (shiftHours != null && worked.compareTo(shiftHours) >= 0) {
-            return AttendanceStatus.PRESENT;
-        }
-        if (halfDayHours != null && worked.compareTo(halfDayHours) >= 0) {
-            return AttendanceStatus.HALF_DAY;
-        }
-        return AttendanceStatus.ABSENT;
-    }
-
     private PunchResponse toPunchResponse(AttendancePunch punch) {
         return PunchResponse.builder()
                 .id(punch.getId())
@@ -527,6 +499,14 @@ public class AttendanceService {
                 .map(this::toPunchResponse)
                 .toList();
 
+        boolean fromPunches = !punches.isEmpty();
+        long workedSeconds = fromPunches
+                ? AttendanceDuration.sumPairedSeconds(punches)
+                : safeSeconds(attendance.getWorkedSeconds());
+        long overtimeSeconds = fromPunches
+                ? overtimeFromSettings(attendance, workedSeconds)
+                : safeSeconds(attendance.getOvertimeSeconds());
+
         return AttendanceResponse.builder()
                 .id(attendance.getId())
                 .userId(user != null ? user.getId() : null)
@@ -535,8 +515,8 @@ public class AttendanceService {
                 .attendanceDate(attendance.getAttendanceDate())
                 .checkIn(attendance.getCheckIn())
                 .checkOut(attendance.getCheckOut())
-                .workedHours(attendance.getWorkedHours())
-                .overtimeHours(attendance.getOvertimeHours())
+                .workedHours(AttendanceDuration.format(workedSeconds))
+                .overtimeHours(AttendanceDuration.format(overtimeSeconds))
                 .status(attendance.getStatus() != null ? attendance.getStatus().name() : null)
                 .source(attendance.getSource() != null ? attendance.getSource().name() : null)
                 .isManual(attendance.getIsManual())

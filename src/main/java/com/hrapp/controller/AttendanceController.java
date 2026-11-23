@@ -41,7 +41,8 @@ public class AttendanceController {
      *   isCheckedIn = true → show "Check Out"
      *   isCheckedIn = false → show "Check In"
      * - Show punches list so employee can see all sessions
-     * - workedHours = sum of all IN→OUT pairs (gaps excluded)
+     * - workedHours and overtimeHours are exact durations HH:MM:SS (e.g. 08:29:57)
+     *   summed from IN→OUT pairs; gaps between sessions are excluded
      * - Do NOT show attendance.status on home screen (reports only)
      */
     @PostMapping("/check-in")

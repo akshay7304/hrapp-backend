@@ -22,6 +22,7 @@ import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.ThumbLogRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.util.AttendanceDuration;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,13 +31,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -402,10 +401,15 @@ public class ThumbScannerService {
         }
 
         if (attendance.getCheckOut() != null && attendance.getCheckIn() != null) {
-            BigDecimal worked = calculateHours(attendance.getCheckIn(), attendance.getCheckOut());
-            attendance.setWorkedHours(worked);
-            attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
-            attendance.setStatus(deriveStatus(worked, settings));
+            long workedSeconds = AttendanceDuration.between(attendance.getCheckIn(), attendance.getCheckOut());
+            long overtimeSeconds = AttendanceDuration.overtimeSeconds(
+                    workedSeconds, settings.getOvertimeAfterHours());
+            attendance.setWorkedSeconds(workedSeconds);
+            attendance.setOvertimeSeconds(overtimeSeconds);
+            attendance.setWorkedHours(AttendanceDuration.toPayrollHours(workedSeconds));
+            attendance.setOvertimeHours(AttendanceDuration.toPayrollHours(overtimeSeconds));
+            attendance.setStatus(AttendanceDuration.deriveStatus(
+                    workedSeconds, settings.getShiftHours(), settings.getHalfDayHours()));
         }
 
         attendance = attendanceRepository.save(attendance);
@@ -431,36 +435,6 @@ public class ThumbScannerService {
                 .punchType(punchType)
                 .source(AttendanceSource.THUMB)
                 .build());
-    }
-
-    private BigDecimal calculateHours(LocalDateTime from, LocalDateTime to) {
-        long minutes = ChronoUnit.MINUTES.between(from, to);
-        if (minutes < 0) {
-            minutes = 0;
-        }
-        return BigDecimal.valueOf(minutes)
-                .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calculateOvertime(BigDecimal worked, BigDecimal threshold) {
-        if (worked == null || threshold == null) {
-            return BigDecimal.ZERO;
-        }
-        return worked.compareTo(threshold) > 0
-                ? worked.subtract(threshold).setScale(2, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
-    }
-
-    private AttendanceStatus deriveStatus(BigDecimal worked, CompanySettings settings) {
-        BigDecimal shiftHours = settings.getShiftHours();
-        BigDecimal halfDayHours = settings.getHalfDayHours();
-        if (shiftHours != null && worked.compareTo(shiftHours) >= 0) {
-            return AttendanceStatus.PRESENT;
-        }
-        if (halfDayHours != null && worked.compareTo(halfDayHours) >= 0) {
-            return AttendanceStatus.HALF_DAY;
-        }
-        return AttendanceStatus.ABSENT;
     }
 
     private ThumbLogResponse toResponse(ThumbLog log) {

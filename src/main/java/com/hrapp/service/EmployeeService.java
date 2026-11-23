@@ -57,11 +57,6 @@ public class EmployeeService {
 
     private static final String STATUS_ACTIVE = "Active";
     private static final String ROLE_SUPERADMIN = "SUPERADMIN";
-    private static final String ROLE_ADMIN = "ADMIN";
-    private static final String ROLE_HR = "HR";
-    private static final String ROLE_EMPLOYEE = "EMPLOYEE";
-    private static final Set<String> ADMIN_CREATABLE_ROLES = Set.of(ROLE_EMPLOYEE, ROLE_HR);
-    private static final Set<String> HR_CREATABLE_ROLES = Set.of(ROLE_EMPLOYEE);
     private static final Set<String> TOKEN_REVOKE_STATUSES =
             Set.of("terminated", "resigned", "suspended", "inactive");
 
@@ -75,6 +70,7 @@ public class EmployeeService {
     private final PasswordEncoder passwordEncoder;
     private final LeaveService leaveService;
     private final TokenRevocationService tokenRevocationService;
+    private final RoleService roleService;
 
     @Transactional
     public EmployeeResponse createEmployee(CreateEmployeeRequest request) {
@@ -100,7 +96,7 @@ public class EmployeeService {
 
         Role role = roleRepository.findById(request.getRoleId())
                 .orElseThrow(() -> new ResourceNotFoundException("Role not found"));
-        ensureCreatableRole(role);
+        roleService.ensureAssignable(role);
 
         Company company = companyRepository.findByIdAndIsActive(companyId, true)
                 .orElseThrow(() -> new BadRequestException("Company is inactive or does not exist"));
@@ -218,7 +214,7 @@ public class EmployeeService {
         if (request.getRoleId() != null) {
             Role role = roleRepository.findById(request.getRoleId())
                     .orElseThrow(() -> new ResourceNotFoundException("Role not found"));
-            ensureCreatableRole(role);
+            roleService.ensureAssignable(role);
             userRoleRepository.deleteByUser_Id(user.getId());
             userRoleRepository.save(UserRole.builder().user(user).role(role).build());
             roleChanged = true;
@@ -262,28 +258,6 @@ public class EmployeeService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Profile not found"));
         return toResponse(user, fetchRoleNames(user.getId()), null);
-    }
-
-    /**
-     * Blocks privilege escalation: SUPERADMIN never via create; ADMIN only via
-     * {@code /companies/{id}/admins}. ADMIN may create EMPLOYEE/HR; HR only EMPLOYEE.
-     */
-    private void ensureCreatableRole(Role role) {
-        String roleName = role.getName();
-        if (ROLE_SUPERADMIN.equals(roleName) || ROLE_ADMIN.equals(roleName)) {
-            throw new BadRequestException(
-                    "Cannot assign " + roleName + " via employee create. "
-                            + "Use company admin APIs for ADMIN; SUPERADMIN is platform-only.");
-        }
-        if (SecurityUtil.hasRole(ROLE_ADMIN) || SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
-            if (!ADMIN_CREATABLE_ROLES.contains(roleName)) {
-                throw new BadRequestException("Allowed roles on create: EMPLOYEE, HR");
-            }
-            return;
-        }
-        if (!HR_CREATABLE_ROLES.contains(roleName)) {
-            throw new BadRequestException("HR can only create EMPLOYEE users");
-        }
     }
 
     private Long requireCallerCompanyId() {
