@@ -13,7 +13,6 @@ import com.hrapp.dto.response.HomeOpsResponse;
 import com.hrapp.dto.response.HomeOpsTodayAttendanceSummaryResponse;
 import com.hrapp.dto.response.HomeResponse;
 import com.hrapp.dto.response.LeaveBalanceResponse;
-import com.hrapp.entity.Attendance;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.Holiday;
 import com.hrapp.entity.User;
@@ -41,7 +40,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Single home-screen aggregate. Role comes from the JWT; EMPLOYEE gets {@code me}
@@ -170,37 +171,19 @@ public class HomeService {
 
     private HomeOpsTodayAttendanceSummaryResponse buildTodayAttendanceSummary(
             Long companyId, LocalDate today, long totalActiveEmployees) {
-        List<Attendance> rows = attendanceRepository.findByCompanyIdAndAttendanceDate(companyId, today);
-
-        int present = 0;
-        int absent = 0;
-        int halfDay = 0;
-        int onLeave = 0;
-        int weekOff = 0;
-        int holiday = 0;
-        int checkedInNow = 0;
-        int checkedInToday = 0;
-
-        for (Attendance row : rows) {
-            AttendanceStatus status = row.getStatus();
-            if (status != null) {
-                switch (status) {
-                    case PRESENT -> present++;
-                    case ABSENT -> absent++;
-                    case HALF_DAY -> halfDay++;
-                    case ON_LEAVE -> onLeave++;
-                    case WEEK_OFF -> weekOff++;
-                    case HOLIDAY -> holiday++;
-                }
-            }
-            if (row.getCheckIn() != null) {
-                checkedInToday++;
-                if (row.getCheckOut() == null) {
-                    checkedInNow++;
-                }
-            }
+        Object[] row = attendanceRepository.summarizeCompanyDay(companyId, today);
+        // Hibernate may return the scalar array directly, or wrap as Object[]{ Object[] }.
+        if (row != null && row.length == 1 && row[0] instanceof Object[] nested) {
+            row = nested;
         }
-
+        int present = toInt(row, 0);
+        int absent = toInt(row, 1);
+        int halfDay = toInt(row, 2);
+        int onLeave = toInt(row, 3);
+        int weekOff = toInt(row, 4);
+        int holiday = toInt(row, 5);
+        int checkedInToday = toInt(row, 6);
+        int checkedInNow = toInt(row, 7);
         int notCheckedIn = (int) Math.max(0, totalActiveEmployees - checkedInToday);
 
         return HomeOpsTodayAttendanceSummaryResponse.builder()
@@ -219,12 +202,20 @@ public class HomeService {
             Long companyId, YearMonth month) {
         int monthValue = month.getMonthValue();
         int year = month.getYear();
-        long generated = salaryPaymentRepository.countByUser_CompanyIdAndMonthAndYear(
-                companyId, monthValue, year);
-        long paid = salaryPaymentRepository.countByUser_CompanyIdAndMonthAndYearAndStatus(
-                companyId, monthValue, year, PaymentStatus.PAID);
-        long unpaid = salaryPaymentRepository.countByUser_CompanyIdAndMonthAndYearAndStatus(
-                companyId, monthValue, year, PaymentStatus.DRAFT);
+        long generated = 0;
+        long paid = 0;
+        long unpaid = 0;
+        for (Object[] row : salaryPaymentRepository.countStatusesByCompanyMonthYear(
+                companyId, monthValue, year)) {
+            PaymentStatus status = (PaymentStatus) row[0];
+            long count = ((Number) row[1]).longValue();
+            generated += count;
+            if (status == PaymentStatus.PAID) {
+                paid = count;
+            } else if (status == PaymentStatus.DRAFT) {
+                unpaid = count;
+            }
+        }
 
         return HomeOpsPayrollStatusResponse.builder()
                 .month(monthValue)
@@ -245,41 +236,32 @@ public class HomeService {
     }
 
     private HomeMeMonthSummaryResponse buildMonthSummary(Long userId, YearMonth month) {
-        List<Attendance> rows = attendanceRepository.findByUserIdAndAttendanceDateBetween(
-                userId, month.atDay(1), month.atEndOfMonth());
-
-        int present = 0;
-        int absent = 0;
-        int halfDay = 0;
-        int onLeave = 0;
-        int weekOff = 0;
-        int holiday = 0;
-
-        for (Attendance row : rows) {
-            AttendanceStatus status = row.getStatus();
-            if (status == null) {
+        Map<AttendanceStatus, Integer> counts = new EnumMap<>(AttendanceStatus.class);
+        for (Object[] row : attendanceRepository.countStatusByUserIdAndAttendanceDateBetween(
+                userId, month.atDay(1), month.atEndOfMonth())) {
+            if (row[0] == null) {
                 continue;
             }
-            switch (status) {
-                case PRESENT -> present++;
-                case ABSENT -> absent++;
-                case HALF_DAY -> halfDay++;
-                case ON_LEAVE -> onLeave++;
-                case WEEK_OFF -> weekOff++;
-                case HOLIDAY -> holiday++;
-            }
+            counts.put((AttendanceStatus) row[0], ((Number) row[1]).intValue());
         }
 
         return HomeMeMonthSummaryResponse.builder()
                 .month(month.getMonthValue())
                 .year(month.getYear())
-                .presentDays(present)
-                .absentDays(absent)
-                .halfDays(halfDay)
-                .onLeaveDays(onLeave)
-                .weekOffDays(weekOff)
-                .holidayDays(holiday)
+                .presentDays(counts.getOrDefault(AttendanceStatus.PRESENT, 0))
+                .absentDays(counts.getOrDefault(AttendanceStatus.ABSENT, 0))
+                .halfDays(counts.getOrDefault(AttendanceStatus.HALF_DAY, 0))
+                .onLeaveDays(counts.getOrDefault(AttendanceStatus.ON_LEAVE, 0))
+                .weekOffDays(counts.getOrDefault(AttendanceStatus.WEEK_OFF, 0))
+                .holidayDays(counts.getOrDefault(AttendanceStatus.HOLIDAY, 0))
                 .build();
+    }
+
+    private static int toInt(Object[] row, int index) {
+        if (row == null || index >= row.length || row[index] == null) {
+            return 0;
+        }
+        return ((Number) row[index]).intValue();
     }
 
     private HolidayResponse toHolidayResponse(Holiday holiday) {

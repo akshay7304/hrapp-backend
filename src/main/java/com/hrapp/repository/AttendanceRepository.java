@@ -70,4 +70,35 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
     List<Attendance> findByCompanyIdAndAttendanceDateAndCheckInIsNotNullAndCheckOutIsNull(
             Long companyId, LocalDate attendanceDate);
+
+    /**
+     * Month/day status tallies without loading rows — used by home dashboard.
+     * Returns {@code [AttendanceStatus, Long count]}.
+     */
+    @Query("SELECT a.status, COUNT(a) FROM Attendance a "
+            + "WHERE a.user.id = :userId AND a.attendanceDate BETWEEN :from AND :to "
+            + "GROUP BY a.status")
+    List<Object[]> countStatusByUserIdAndAttendanceDateBetween(
+            @Param("userId") Long userId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to);
+
+    /**
+     * Today company attendance summary in one round-trip.
+     * Returns a single row:
+     * {@code [present, absent, halfDay, onLeave, weekOff, holiday, checkedInToday, checkedInNow]}.
+     */
+    @Query("SELECT "
+            + "COALESCE(SUM(CASE WHEN a.status = com.hrapp.enums.AttendanceStatus.PRESENT THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.status = com.hrapp.enums.AttendanceStatus.ABSENT THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.status = com.hrapp.enums.AttendanceStatus.HALF_DAY THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.status = com.hrapp.enums.AttendanceStatus.ON_LEAVE THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.status = com.hrapp.enums.AttendanceStatus.WEEK_OFF THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.status = com.hrapp.enums.AttendanceStatus.HOLIDAY THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.checkIn IS NOT NULL THEN 1 ELSE 0 END), 0), "
+            + "COALESCE(SUM(CASE WHEN a.checkIn IS NOT NULL AND a.checkOut IS NULL THEN 1 ELSE 0 END), 0) "
+            + "FROM Attendance a WHERE a.company.id = :companyId AND a.attendanceDate = :date")
+    Object[] summarizeCompanyDay(
+            @Param("companyId") Long companyId,
+            @Param("date") LocalDate date);
 }

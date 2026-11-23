@@ -96,15 +96,17 @@ public class AttendanceService {
                         .isAutoCheckout(false)
                         .build());
 
-        if (attendance.getId() != null) {
-            Optional<AttendancePunch> lastPunch = getLastPunch(attendance.getId());
-            if (!canCheckIn(attendance, lastPunch)) {
-                throw new ConflictException("Already checked in. Please check out first.");
-            }
+        List<AttendancePunch> existingPunches = attendance.getId() != null
+                ? attendancePunchRepository.findByAttendanceIdOrderByPunchTimeAsc(attendance.getId())
+                : List.of();
+        Optional<AttendancePunch> lastPunch = existingPunches.isEmpty()
+                ? Optional.empty()
+                : Optional.of(existingPunches.get(existingPunches.size() - 1));
+        if (attendance.getId() != null && !canCheckIn(attendance, lastPunch)) {
+            throw new ConflictException("Already checked in. Please check out first.");
         }
 
-        boolean firstPunchOfDay = attendance.getId() == null
-                || attendancePunchRepository.countByAttendanceId(attendance.getId()) == 0;
+        boolean firstPunchOfDay = existingPunches.isEmpty();
         if (firstPunchOfDay) {
             attendance.setCheckIn(now);
         }
@@ -118,15 +120,18 @@ public class AttendanceService {
                 .punchType(PunchType.IN)
                 .source(AttendanceSource.WEB)
                 .build();
-        attendancePunchRepository.save(punch);
+        punch = attendancePunchRepository.save(punch);
 
         if (!firstPunchOfDay) {
             attendance.setStatus(AttendanceStatus.PRESENT);
             attendance = attendanceRepository.save(attendance);
         }
 
+        List<AttendancePunch> punchesForResponse = new ArrayList<>(existingPunches);
+        punchesForResponse.add(punch);
+
         log.info("Check-in user={} date={} punchId={}", userId, today, punch.getId());
-        return toResponse(attendance);
+        return toResponse(attendance, punchesForResponse);
     }
 
     @Transactional
@@ -139,9 +144,12 @@ public class AttendanceService {
         Attendance attendance = attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
                 .orElseThrow(() -> new ResourceNotFoundException("No check-in found for today"));
 
-        Optional<AttendancePunch> lastPunch = attendance.getId() != null
-                ? getLastPunch(attendance.getId())
-                : Optional.empty();
+        List<AttendancePunch> existingPunches = attendance.getId() != null
+                ? attendancePunchRepository.findByAttendanceIdOrderByPunchTimeAsc(attendance.getId())
+                : List.of();
+        Optional<AttendancePunch> lastPunch = existingPunches.isEmpty()
+                ? Optional.empty()
+                : Optional.of(existingPunches.get(existingPunches.size() - 1));
         if (!canCheckOut(attendance, lastPunch)) {
             throw new ConflictException("Not checked in. Please check in first.");
         }
@@ -157,12 +165,12 @@ public class AttendanceService {
                 .punchType(PunchType.OUT)
                 .source(AttendanceSource.WEB)
                 .build();
-        attendancePunchRepository.save(punch);
+        punch = attendancePunchRepository.save(punch);
 
         attendance.setCheckOut(now);
 
-        List<AttendancePunch> punches = attendancePunchRepository
-                .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
+        List<AttendancePunch> punches = new ArrayList<>(existingPunches);
+        punches.add(punch);
         BigDecimal worked = calculateWorkedHours(punches);
         attendance.setWorkedHours(worked);
         attendance.setOvertimeHours(calculateOvertime(worked, settings.getOvertimeAfterHours()));
@@ -171,7 +179,7 @@ public class AttendanceService {
         attendance = attendanceRepository.save(attendance);
         log.info("Check-out user={} date={} worked={}h status={}",
                 userId, today, worked, attendance.getStatus());
-        return toResponse(attendance);
+        return toResponse(attendance, punches);
     }
 
     /**
@@ -507,11 +515,14 @@ public class AttendanceService {
     }
 
     private AttendanceResponse toResponse(Attendance attendance) {
-        User user = attendance.getUser();
         List<AttendancePunch> punches = attendance.getId() != null
                 ? attendancePunchRepository.findByAttendanceIdOrderByPunchTimeAsc(attendance.getId())
                 : new ArrayList<>();
+        return toResponse(attendance, punches);
+    }
 
+    private AttendanceResponse toResponse(Attendance attendance, List<AttendancePunch> punches) {
+        User user = attendance.getUser();
         List<PunchResponse> punchResponses = punches.stream()
                 .map(this::toPunchResponse)
                 .toList();

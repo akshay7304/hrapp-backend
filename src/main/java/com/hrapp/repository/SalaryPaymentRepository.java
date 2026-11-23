@@ -64,4 +64,16 @@ public interface SalaryPaymentRepository extends JpaRepository<SalaryPayment, Lo
     /** Payslips in a given payment status for a company month. */
     long countByUser_CompanyIdAndMonthAndYearAndStatus(
             Long companyId, Integer month, Integer year, PaymentStatus status);
+
+    /**
+     * One round-trip payroll status breakdown for home/ops.
+     * Returns {@code [PaymentStatus, Long count]}.
+     */
+    @Query("SELECT sp.status, COUNT(sp) FROM SalaryPayment sp "
+            + "WHERE sp.user.company.id = :companyId AND sp.month = :month AND sp.year = :year "
+            + "GROUP BY sp.status")
+    List<Object[]> countStatusesByCompanyMonthYear(
+            @Param("companyId") Long companyId,
+            @Param("month") Integer month,
+            @Param("year") Integer year);
 }
