@@ -36,15 +36,21 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.data.domain.Page;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Daily attendance with multiple IN/OUT punches per day.
@@ -260,23 +266,21 @@ public class AttendanceService {
     @Transactional(readOnly = true)
     public PageResponse<AttendanceResponse> getMyAttendanceHistory(int month, int year, Pageable pageable) {
         Long userId = requireCallerUserId();
+        Long companyId = requireCallerCompanyId();
         YearMonth ym = YearMonth.of(year, month);
         Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
-        return PageResponse.from(
-                attendanceRepository
-                        .findByUserIdAndAttendanceDateBetween(
-                                userId, ym.atDay(1), ym.atEndOfMonth(), effective)
-                        .map(this::toResponse));
+        Page<Attendance> page = attendanceRepository.findByUserIdAndAttendanceDateBetween(
+                userId, ym.atDay(1), ym.atEndOfMonth(), effective);
+        return toPageResponse(page, toResponsesForSingleUser(page.getContent(), companyId, userId));
     }
 
     @Transactional(readOnly = true)
     public PageResponse<AttendanceResponse> getCompanyAttendanceToday(Pageable pageable) {
         Long companyId = requireCallerCompanyId();
         Pageable effective = applyDefaultSort(pageable, Sort.by("user.fullName"));
-        return PageResponse.from(
-                attendanceRepository
-                        .findByCompanyIdAndAttendanceDate(companyId, AppTime.today(), effective)
-                        .map(this::toResponse));
+        Page<Attendance> page = attendanceRepository.findByCompanyIdAndAttendanceDate(
+                companyId, AppTime.today(), effective);
+        return toPageResponse(page, toResponsesForCompanyDay(page.getContent(), companyId, AppTime.today()));
     }
 
     @Transactional(readOnly = true)
@@ -289,11 +293,9 @@ public class AttendanceService {
 
         YearMonth ym = YearMonth.of(year, month);
         Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
-        return PageResponse.from(
-                attendanceRepository
-                        .findByUserIdAndAttendanceDateBetween(
-                                employeeId, ym.atDay(1), ym.atEndOfMonth(), effective)
-                        .map(this::toResponse));
+        Page<Attendance> page = attendanceRepository.findByUserIdAndAttendanceDateBetween(
+                employeeId, ym.atDay(1), ym.atEndOfMonth(), effective);
+        return toPageResponse(page, toResponsesForSingleUser(page.getContent(), companyId, employeeId));
     }
 
     @Transactional
@@ -554,10 +556,110 @@ public class AttendanceService {
         List<AttendancePunch> punches = attendance.getId() != null
                 ? attendancePunchRepository.findByAttendanceIdOrderByPunchTimeAsc(attendance.getId())
                 : new ArrayList<>();
-        return toResponse(attendance, punches);
+        return toResponse(attendance, punches, null);
     }
 
     private AttendanceResponse toResponse(Attendance attendance, List<AttendancePunch> punches) {
+        return toResponse(attendance, punches, null);
+    }
+
+    /**
+     * Single-user history: 1 punch IN-query + 1 batched shift resolve (2 RTTs),
+     * instead of 2×N per-row queries against Supabase.
+     */
+    private List<AttendanceResponse> toResponsesForSingleUser(
+            List<Attendance> rows, Long companyId, Long userId) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, List<AttendancePunch>> punchesByAttendance = loadPunchesGrouped(rows);
+        List<LocalDate> dates = rows.stream()
+                .map(Attendance::getAttendanceDate)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<LocalDate, ResolvedShiftResponse> shiftsByDate = Collections.emptyMap();
+        if (companyId != null && userId != null && !dates.isEmpty()) {
+            try {
+                shiftsByDate = shiftAssignmentService.resolveForSystemMany(companyId, userId, dates);
+            } catch (Exception ex) {
+                log.debug("Batch shift resolve skipped for userId={}: {}", userId, ex.getMessage());
+            }
+        }
+        List<AttendanceResponse> out = new ArrayList<>(rows.size());
+        for (Attendance attendance : rows) {
+            List<AttendancePunch> punches = punchesByAttendance.getOrDefault(
+                    attendance.getId(), List.of());
+            ResolvedShiftResponse resolved = shiftsByDate.get(attendance.getAttendanceDate());
+            out.add(toResponse(attendance, punches, resolved));
+        }
+        return out;
+    }
+
+    /**
+     * Company day list: 1 punch IN-query + 1 multi-user shift resolve.
+     */
+    private List<AttendanceResponse> toResponsesForCompanyDay(
+            List<Attendance> rows, Long companyId, LocalDate onDate) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, List<AttendancePunch>> punchesByAttendance = loadPunchesGrouped(rows);
+        List<Long> userIds = rows.stream()
+                .map(Attendance::getUser)
+                .filter(Objects::nonNull)
+                .map(User::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<Long, ResolvedShiftResponse> shiftsByUser = Collections.emptyMap();
+        if (companyId != null && !userIds.isEmpty()) {
+            try {
+                shiftsByUser = shiftAssignmentService.resolveForUsersOnDate(companyId, userIds, onDate);
+            } catch (Exception ex) {
+                log.debug("Batch shift resolve skipped for company day: {}", ex.getMessage());
+            }
+        }
+        List<AttendanceResponse> out = new ArrayList<>(rows.size());
+        for (Attendance attendance : rows) {
+            List<AttendancePunch> punches = punchesByAttendance.getOrDefault(
+                    attendance.getId(), List.of());
+            Long uid = attendance.getUser() != null ? attendance.getUser().getId() : null;
+            ResolvedShiftResponse resolved = uid != null ? shiftsByUser.get(uid) : null;
+            out.add(toResponse(attendance, punches, resolved));
+        }
+        return out;
+    }
+
+    private Map<Long, List<AttendancePunch>> loadPunchesGrouped(List<Attendance> rows) {
+        List<Long> ids = rows.stream()
+                .map(Attendance::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return attendancePunchRepository.findByAttendanceIdInOrderByPunchTimeAsc(ids).stream()
+                .collect(Collectors.groupingBy(p -> p.getAttendance().getId()));
+    }
+
+    private PageResponse<AttendanceResponse> toPageResponse(
+            Page<Attendance> page, List<AttendanceResponse> content) {
+        return PageResponse.<AttendanceResponse>builder()
+                .content(content)
+                .pageNumber(page.getNumber())
+                .pageSize(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .isFirst(page.isFirst())
+                .isLast(page.isLast())
+                .hasNext(page.hasNext())
+                .hasPrevious(page.hasPrevious())
+                .build();
+    }
+
+    private AttendanceResponse toResponse(
+            Attendance attendance, List<AttendancePunch> punches, ResolvedShiftResponse preResolved) {
         User user = attendance.getUser();
         List<PunchResponse> punchResponses = punches.stream()
                 .map(this::toPunchResponse)
@@ -571,12 +673,17 @@ public class AttendanceService {
         long overtimeSeconds = safeSeconds(attendance.getOvertimeSeconds());
 
         Boolean late = null;
-        if (attendance.getCheckIn() != null && user != null && user.getCompany() != null) {
+        if (attendance.getCheckIn() != null) {
             try {
-                ResolvedShiftResponse resolved = resolveShift(
-                        user.getCompany().getId(), user.getId(), attendance.getAttendanceDate());
-                late = isLateAgainstShift(
-                        attendance.getCheckIn(), attendance.getAttendanceDate(), resolved);
+                ResolvedShiftResponse resolved = preResolved;
+                if (resolved == null && user != null && user.getCompany() != null) {
+                    resolved = resolveShift(
+                            user.getCompany().getId(), user.getId(), attendance.getAttendanceDate());
+                }
+                if (resolved != null) {
+                    late = isLateAgainstShift(
+                            attendance.getCheckIn(), attendance.getAttendanceDate(), resolved);
+                }
             } catch (Exception ex) {
                 log.debug("Late flag skipped for attendanceId={}: {}", attendance.getId(), ex.getMessage());
             }

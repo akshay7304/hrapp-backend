@@ -25,7 +25,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Fixed shift assignment with effective dating, plus resolve-for-date
@@ -146,14 +149,97 @@ public class ShiftAssignmentService {
         return resolveInternal(user, companyId, onDate);
     }
 
+    /**
+     * Batch resolve for one user across many dates — 2 DB round-trips total
+     * (assignment history + company default), then in-memory lookup per date.
+     * Used by attendance history to avoid N× resolve on Supabase.
+     */
+    @Transactional(readOnly = true)
+    public Map<LocalDate, ResolvedShiftResponse> resolveForSystemMany(
+            Long companyId, Long userId, Collection<LocalDate> dates) {
+        Map<LocalDate, ResolvedShiftResponse> result = new HashMap<>();
+        if (dates == null || dates.isEmpty()) {
+            return result;
+        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
+        if (user.getCompany() == null || !companyId.equals(user.getCompany().getId())) {
+            throw new UnauthorizedException("Employee does not belong to this company");
+        }
+        List<ShiftAssignment> history = shiftAssignmentRepository.findHistoryByUserId(userId);
+        Shift companyDefault = shiftRepository
+                .findByCompanyIdAndIsDefaultTrueAndIsActiveTrue(companyId)
+                .orElse(null);
+        for (LocalDate onDate : dates) {
+            if (onDate != null) {
+                result.put(onDate, resolveFromLoaded(user, onDate, history, companyDefault));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Batch resolve for many users on one date — 2 DB round-trips
+     * (assignments for those users + company default).
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, ResolvedShiftResponse> resolveForUsersOnDate(
+            Long companyId, Collection<Long> userIds, LocalDate onDate) {
+        Map<Long, ResolvedShiftResponse> result = new HashMap<>();
+        if (userIds == null || userIds.isEmpty() || onDate == null) {
+            return result;
+        }
+        Shift companyDefault = shiftRepository
+                .findByCompanyIdAndIsDefaultTrueAndIsActiveTrue(companyId)
+                .orElse(null);
+        List<ShiftAssignment> candidates = shiftAssignmentRepository
+                .findEffectiveOnOrBeforeForUsers(userIds, onDate);
+        Map<Long, ShiftAssignment> effectiveByUser = new HashMap<>();
+        for (ShiftAssignment sa : candidates) {
+            Long uid = sa.getUser().getId();
+            // Ordered DESC by effectiveFrom — first win per user
+            effectiveByUser.putIfAbsent(uid, sa);
+        }
+        for (Long userId : userIds) {
+            if (userId == null) {
+                continue;
+            }
+            User stub = User.builder().id(userId).build();
+            result.put(userId, resolveFromAssignmentAndDefault(
+                    stub, onDate, effectiveByUser.get(userId), companyDefault));
+        }
+        return result;
+    }
+
     private ResolvedShiftResponse resolveInternal(User user, Long companyId, LocalDate onDate) {
         var assignmentOpt = shiftAssignmentRepository
                 .findFirstByUser_IdAndEffectiveFromLessThanEqualOrderByEffectiveFromDesc(
                         user.getId(), onDate);
-        if (assignmentOpt.isPresent()) {
-            ShiftAssignment sa = assignmentOpt.get();
+        ShiftAssignment sa = assignmentOpt.orElse(null);
+        Shift companyDefault = shiftRepository
+                .findByCompanyIdAndIsDefaultTrueAndIsActiveTrue(companyId)
+                .orElse(null);
+        return resolveFromAssignmentAndDefault(user, onDate, sa, companyDefault);
+    }
+
+    private ResolvedShiftResponse resolveFromLoaded(User user, LocalDate onDate,
+                                                    List<ShiftAssignment> historyDesc,
+                                                    Shift companyDefault) {
+        ShiftAssignment effective = null;
+        for (ShiftAssignment sa : historyDesc) {
+            if (!sa.getEffectiveFrom().isAfter(onDate)) {
+                effective = sa;
+                break;
+            }
+        }
+        return resolveFromAssignmentAndDefault(user, onDate, effective, companyDefault);
+    }
+
+    private ResolvedShiftResponse resolveFromAssignmentAndDefault(
+            User user, LocalDate onDate, ShiftAssignment sa, Shift companyDefault) {
+        if (sa != null) {
             Shift shift = sa.getShift();
-            if (Boolean.TRUE.equals(shift.getIsActive())) {
+            if (shift != null && Boolean.TRUE.equals(shift.getIsActive())) {
                 return ResolvedShiftResponse.builder()
                         .userId(user.getId())
                         .date(onDate)
@@ -163,18 +249,16 @@ public class ShiftAssignmentService {
                         .assignmentEffectiveFrom(sa.getEffectiveFrom())
                         .build();
             }
-            // Assignment points at deactivated shift — fall through to company default
-            log.warn("Effective assignment id={} points at inactive shift id={} — falling back",
-                    sa.getId(), shift.getId());
+            log.warn("Effective assignment id={} points at inactive shift — falling back",
+                    sa.getId());
         }
 
-        var defaultOpt = shiftRepository.findByCompanyIdAndIsDefaultTrueAndIsActiveTrue(companyId);
-        if (defaultOpt.isPresent()) {
+        if (companyDefault != null) {
             return ResolvedShiftResponse.builder()
                     .userId(user.getId())
                     .date(onDate)
                     .source(ShiftResolveSource.COMPANY_DEFAULT)
-                    .shift(toShiftResponse(defaultOpt.get()))
+                    .shift(toShiftResponse(companyDefault))
                     .build();
         }
 

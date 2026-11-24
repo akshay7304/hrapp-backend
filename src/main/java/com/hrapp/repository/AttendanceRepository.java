@@ -36,7 +36,7 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
      * {@code JOIN FETCH} on a {@code Pageable} query would force in-memory
      * pagination (HHH000104).
      */
-    @EntityGraph(attributePaths = {"user"})
+    @EntityGraph(attributePaths = {"user", "user.company"})
     Page<Attendance> findByCompanyIdAndAttendanceDate(
             Long companyId, LocalDate attendanceDate, Pageable pageable);
 
@@ -51,7 +51,7 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
             Long userId, LocalDate from, LocalDate to);
 
     /** Paginated history lookup; ordering is whatever {@code Pageable.sort} requests. */
-    @EntityGraph(attributePaths = {"user"})
+    @EntityGraph(attributePaths = {"user", "user.company"})
     Page<Attendance> findByUserIdAndAttendanceDateBetween(
             Long userId, LocalDate from, LocalDate to, Pageable pageable);
 

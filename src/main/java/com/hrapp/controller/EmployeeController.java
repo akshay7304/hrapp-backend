@@ -5,6 +5,7 @@ import com.hrapp.dto.request.CreateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeStatusRequest;
 import com.hrapp.dto.response.EmployeeResponse;
+import com.hrapp.dto.response.EmployeeSetupResponse;
 import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.SalaryAdjustmentResponse;
 import com.hrapp.dto.response.SalaryStructureResponse;
@@ -60,6 +61,18 @@ public class EmployeeController {
         PageResponse<EmployeeResponse> employees =
                 employeeService.getAllEmployees(departmentId, statusId, search, pageable);
         return ResponseEntity.ok(ApiResponse.success(employees, "Employees retrieved successfully"));
+    }
+
+    /**
+     * Create/edit employee form dropdowns in one call:
+     * departments, designations, assignable roles, salaryTypes.
+     * Declared before {@code /{id}} so it is not captured as an id.
+     */
+    @GetMapping("/setup")
+    @PreAuthorize("hasAnyRole('ADMIN','HR')")
+    public ResponseEntity<ApiResponse<EmployeeSetupResponse>> getEmployeeSetup() {
+        EmployeeSetupResponse response = employeeService.getEmployeeSetup();
+        return ResponseEntity.ok(ApiResponse.success(response, "Employee setup retrieved successfully"));
     }
 
     /**

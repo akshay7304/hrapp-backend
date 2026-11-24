@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +28,19 @@ public interface ShiftAssignmentRepository extends JpaRepository<ShiftAssignment
     List<ShiftAssignment> findHistoryByUserId(@Param("userId") Long userId);
 
     Optional<ShiftAssignment> findByUser_IdAndEffectiveFrom(Long userId, LocalDate effectiveFrom);
+
+    /**
+     * Candidates for effective assignment on {@code onDate} for many users —
+     * caller picks the latest {@code effectiveFrom} per user (list is ordered DESC).
+     */
+    @EntityGraph(attributePaths = {"shift", "user"})
+    @Query("SELECT sa FROM ShiftAssignment sa "
+            + "WHERE sa.user.id IN :userIds "
+            + "AND sa.effectiveFrom <= :onDate "
+            + "ORDER BY sa.user.id ASC, sa.effectiveFrom DESC")
+    List<ShiftAssignment> findEffectiveOnOrBeforeForUsers(
+            @Param("userIds") Collection<Long> userIds,
+            @Param("onDate") LocalDate onDate);
 
     long countByShiftId(Long shiftId);
 }

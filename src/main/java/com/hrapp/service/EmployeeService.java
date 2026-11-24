@@ -4,7 +4,9 @@ import com.hrapp.dto.request.CreateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeRequest;
 import com.hrapp.dto.request.UpdateEmployeeStatusRequest;
 import com.hrapp.dto.response.EmployeeResponse;
+import com.hrapp.dto.response.EmployeeSetupResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.enums.SalaryType;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.Department;
 import com.hrapp.entity.Designation;
@@ -35,6 +37,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -71,6 +74,23 @@ public class EmployeeService {
     private final LeaveService leaveService;
     private final TokenRevocationService tokenRevocationService;
     private final RoleService roleService;
+    private final DepartmentService departmentService;
+    private final DesignationService designationService;
+
+    /**
+     * Single payload for employee create/edit dropdowns (company-scoped).
+     * Roles are filtered to what the caller may assign.
+     */
+    @Transactional(readOnly = true)
+    public EmployeeSetupResponse getEmployeeSetup() {
+        requireCallerCompanyId();
+        return EmployeeSetupResponse.builder()
+                .departments(departmentService.getAllDepartments())
+                .designations(designationService.getAllDesignations())
+                .roles(roleService.getAssignableRoles())
+                .salaryTypes(Arrays.stream(SalaryType.values()).map(Enum::name).toList())
+                .build();
+    }
 
     @Transactional
     public EmployeeResponse createEmployee(CreateEmployeeRequest request) {
