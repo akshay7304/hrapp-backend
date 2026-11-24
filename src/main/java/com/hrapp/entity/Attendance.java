@@ -99,6 +99,13 @@ public class Attendance {
     @Builder.Default
     private Boolean isAutoCheckout = false;
 
+    /**
+     * Late vs resolved shift at first check-in. Stored so history lists
+     * do not re-resolve shifts on every read.
+     */
+    @Column(name = "is_late")
+    private Boolean isLate;
+
     @Column(name = "manual_reason", columnDefinition = "text")
     private String manualReason;
 

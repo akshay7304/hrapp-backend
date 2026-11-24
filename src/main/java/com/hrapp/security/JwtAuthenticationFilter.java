@@ -34,8 +34,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtUtil jwtUtil;
-    private final TokenRevocationService tokenRevocationService;
-    private final AccountAccessService accountAccessService;
+    private final RequestAccessService requestAccessService;
 
     /**
      * server.servlet.context-path is {@code /api/v1}, so the servlet path here
@@ -66,13 +65,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
                 Long userId = jwtUtil.extractUserId(token);
-                if (tokenRevocationService.isRevoked(userId, jwtUtil.extractIssuedAt(token))) {
-                    log.debug("Rejected revoked JWT for userId={}", userId);
-                    writeUnauthorized(response, "Session revoked — please login again");
-                    return;
-                }
-
-                Optional<String> denied = accountAccessService.accessDeniedReason(userId);
+                Optional<String> denied = requestAccessService.denyReason(
+                        userId, jwtUtil.extractIssuedAt(token));
                 if (denied.isPresent()) {
                     log.debug("Rejected JWT for userId={} — {}", userId, denied.get());
                     writeUnauthorized(response, denied.get());

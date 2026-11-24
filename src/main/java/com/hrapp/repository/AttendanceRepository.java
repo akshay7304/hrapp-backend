@@ -40,6 +40,7 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
     Page<Attendance> findByCompanyIdAndAttendanceDate(
             Long companyId, LocalDate attendanceDate, Pageable pageable);
 
+    @EntityGraph(attributePaths = {"user", "user.company"})
     List<Attendance> findByUserIdAndAttendanceDateBetweenOrderByAttendanceDateAsc(
             Long userId, LocalDate from, LocalDate to);
 

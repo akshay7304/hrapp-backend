@@ -412,7 +412,9 @@ public class ThumbScannerService {
                         .build());
 
         LocalDateTime newCheckIn = firstIn.getPunchTime();
-        if (attendance.getCheckIn() == null || newCheckIn.isBefore(attendance.getCheckIn())) {
+        boolean checkInChanged = attendance.getCheckIn() == null
+                || newCheckIn.isBefore(attendance.getCheckIn());
+        if (checkInChanged) {
             attendance.setCheckIn(newCheckIn);
         }
         if (lastOut != null) {
@@ -435,9 +437,12 @@ public class ThumbScannerService {
         attendance.setWorkedHours(AttendanceDuration.toPayrollHours(workedSeconds));
         attendance.setOvertimeHours(BigDecimal.ZERO.setScale(2));
 
+        ResolvedShiftResponse resolved = shiftAssignmentService.resolveForSystem(
+                company.getId(), user.getId(), date);
+        if (checkInChanged && attendance.getCheckIn() != null) {
+            attendance.setIsLate(isLateAgainstShift(attendance.getCheckIn(), date, resolved));
+        }
         if (attendance.getCheckOut() != null) {
-            ResolvedShiftResponse resolved = shiftAssignmentService.resolveForSystem(
-                    company.getId(), user.getId(), date);
             ShiftResponse shift = resolved.getShift();
             BigDecimal fullDay = shift != null ? shift.getFullDayHours() : null;
             BigDecimal halfDay = shift != null ? shift.getHalfDayHours() : null;
@@ -445,6 +450,21 @@ public class ThumbScannerService {
         }
 
         attendanceRepository.save(attendance);
+    }
+
+    private boolean isLateAgainstShift(LocalDateTime checkIn, LocalDate attendanceDate,
+                                       ResolvedShiftResponse resolved) {
+        if (checkIn == null || resolved == null || resolved.getShift() == null
+                || resolved.getShift().getStartTime() == null) {
+            return false;
+        }
+        int grace = resolved.getShift().getGraceLateMinutes() != null
+                ? resolved.getShift().getGraceLateMinutes()
+                : 0;
+        LocalDateTime lateAfter = attendanceDate
+                .atTime(resolved.getShift().getStartTime())
+                .plusMinutes(grace);
+        return checkIn.isAfter(lateAfter);
     }
 
     private void ensurePunch(Attendance attendance, User user,

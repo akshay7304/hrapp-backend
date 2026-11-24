@@ -17,6 +17,16 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByMobile(String mobile);
 
+    /**
+     * Single round-trip for JWT request gate: user + company + status
+     * (includes {@code tokensRevokedBefore} on the user row).
+     */
+    @Query("SELECT u FROM User u "
+            + "LEFT JOIN FETCH u.company "
+            + "LEFT JOIN FETCH u.status "
+            + "WHERE u.id = :userId")
+    Optional<User> findAccessSnapshotById(@Param("userId") Long userId);
+
     boolean existsByMobile(String mobile);
 
     boolean existsByEmpCodeAndCompanyId(String empCode, Long companyId);

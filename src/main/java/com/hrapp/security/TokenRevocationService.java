@@ -24,6 +24,7 @@ public class TokenRevocationService {
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     private final UserRepository userRepository;
+    private final RequestAccessService requestAccessService;
     private final Map<Long, Instant> cache = new ConcurrentHashMap<>();
 
     @Transactional
@@ -33,6 +34,7 @@ public class TokenRevocationService {
         }
         Instant now = Instant.now();
         cache.put(userId, now);
+        requestAccessService.invalidate(userId);
         userRepository.findById(userId).ifPresent(user -> {
             user.setTokensRevokedBefore(LocalDateTime.ofInstant(now, IST));
             userRepository.save(user);
