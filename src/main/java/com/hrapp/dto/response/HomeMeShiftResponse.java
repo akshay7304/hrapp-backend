@@ -15,6 +15,10 @@ import java.time.LocalTime;
 @Builder
 public class HomeMeShiftResponse {
 
+    private Long shiftId;
+    private String shiftName;
+    private String source;
     private LocalTime shiftStartTime;
     private LocalTime shiftEndTime;
+    private Integer graceLateMinutes;
 }

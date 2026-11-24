@@ -32,6 +32,8 @@ public class AttendanceResponse {
     private String source;
     private Boolean isManual;
     private Boolean isAutoCheckout;
+    /** True when first check-in is after shift start + grace (resolved shift). */
+    private Boolean isLate;
     private String manualReason;
     private List<PunchResponse> punches;
     private Integer totalSessions;

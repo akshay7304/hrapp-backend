@@ -78,7 +78,7 @@ public class ThumbScannerController {
      * their own company regardless of what they send.
      */
     @PostMapping("/process")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','HR')")
     public ResponseEntity<ApiResponse<ThumbProcessResult>> processThumbLogs(
             @RequestParam(required = false) Long companyId) {
         Long effectiveCompanyId = resolveCompanyIdForProcessing(companyId);

@@ -35,7 +35,6 @@ public class CompanySettingsService {
     private static final String ROLE_SUPERADMIN = "SUPERADMIN";
 
     private final CompanySettingsRepository companySettingsRepository;
-    @SuppressWarnings("unused")
     private final CompanyRepository companyRepository;
 
     @Transactional(readOnly = true)
@@ -52,12 +51,25 @@ public class CompanySettingsService {
         CompanySettings settings = companySettingsRepository.findByCompanyId(effectiveCompanyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Company settings not configured"));
 
-        settings.setShiftStartTime(request.getShiftStartTime());
-        settings.setShiftEndTime(request.getShiftEndTime());
-        settings.setShiftHours(request.getShiftHours());
-        settings.setHalfDayHours(request.getHalfDayHours());
-        settings.setOvertimeAfterHours(request.getOvertimeAfterHours());
-        settings.setLateMarkAfterMinutes(request.getLateMarkAfterMinutes());
+        // Legacy shift/OT/late fields — optional; attendance uses shift master.
+        if (request.getShiftStartTime() != null) {
+            settings.setShiftStartTime(request.getShiftStartTime());
+        }
+        if (request.getShiftEndTime() != null) {
+            settings.setShiftEndTime(request.getShiftEndTime());
+        }
+        if (request.getShiftHours() != null) {
+            settings.setShiftHours(request.getShiftHours());
+        }
+        if (request.getHalfDayHours() != null) {
+            settings.setHalfDayHours(request.getHalfDayHours());
+        }
+        if (request.getOvertimeAfterHours() != null) {
+            settings.setOvertimeAfterHours(request.getOvertimeAfterHours());
+        }
+        if (request.getLateMarkAfterMinutes() != null) {
+            settings.setLateMarkAfterMinutes(request.getLateMarkAfterMinutes());
+        }
         settings.setWeekOffDay(resolveWeekOffStorage(request));
         if (request.getLeaveCountType() != null && !request.getLeaveCountType().isBlank()) {
             settings.setLeaveCountType(resolveLeaveCountType(request.getLeaveCountType()));
@@ -116,8 +128,10 @@ public class CompanySettingsService {
     private Long resolveCompanyId(Long pathCompanyId) {
         if (SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
             if (pathCompanyId == null) {
-                throw new ResourceNotFoundException("Company not found");
+                throw new BadRequestException("companyId is required");
             }
+            companyRepository.findById(pathCompanyId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
             return pathCompanyId;
         }
         Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();

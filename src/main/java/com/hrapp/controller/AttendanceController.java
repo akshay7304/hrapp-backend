@@ -2,6 +2,7 @@ package com.hrapp.controller;
 
 import com.hrapp.ApiResponse;
 import com.hrapp.dto.request.ManualAttendanceRequest;
+import com.hrapp.dto.request.SetOvertimeRequest;
 import com.hrapp.dto.response.AttendanceResponse;
 import com.hrapp.dto.response.PageResponse;
 import com.hrapp.exception.BadRequestException;
@@ -118,17 +119,34 @@ public class AttendanceController {
         return ResponseEntity.ok(ApiResponse.success(response, "Manual attendance recorded successfully"));
     }
 
-    @PostMapping("/auto-checkout")
+    @PostMapping("/{attendanceId}/overtime")
     @PreAuthorize("hasAnyRole('ADMIN','HR')")
+    public ResponseEntity<ApiResponse<AttendanceResponse>> setOvertime(
+            @PathVariable Long attendanceId,
+            @Valid @RequestBody SetOvertimeRequest request) {
+        AttendanceResponse response = attendanceService.setOvertime(attendanceId, request);
+        return ResponseEntity.ok(ApiResponse.success(response, "Overtime updated successfully"));
+    }
+
+    @PostMapping("/auto-checkout")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN','HR')")
     public ResponseEntity<ApiResponse<String>> triggerAutoCheckout(
             @RequestParam(required = false) Long companyId) {
-        Long effectiveCompanyId = companyId != null ? companyId : SecurityUtil.getCurrentUserCompanyId();
-        if (effectiveCompanyId == null) {
-            throw new BadRequestException("companyId is required when caller is not bound to a company");
-        }
         Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();
-        if (callerCompanyId != null && !callerCompanyId.equals(effectiveCompanyId)) {
-            throw new UnauthorizedException("Cannot run auto checkout for another company");
+        Long effectiveCompanyId;
+        if (SecurityUtil.hasRole("SUPERADMIN")) {
+            effectiveCompanyId = companyId != null ? companyId : callerCompanyId;
+            if (effectiveCompanyId == null) {
+                throw new BadRequestException("companyId is required for SUPERADMIN auto checkout");
+            }
+        } else {
+            if (callerCompanyId == null) {
+                throw new UnauthorizedException("Caller is not bound to a company");
+            }
+            if (companyId != null && !companyId.equals(callerCompanyId)) {
+                throw new UnauthorizedException("Cannot run auto checkout for another company");
+            }
+            effectiveCompanyId = callerCompanyId;
         }
         int count = attendanceService.autoCheckoutMissed(effectiveCompanyId);
         return ResponseEntity.ok(ApiResponse.success(

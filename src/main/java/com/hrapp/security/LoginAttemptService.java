@@ -1,5 +1,7 @@
 package com.hrapp.security;
 
+import com.hrapp.util.AppTime;
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -39,7 +41,7 @@ public class LoginAttemptService {
             if (info.lockUntil == null) {
                 return false;
             }
-            if (info.lockUntil.isAfter(LocalDateTime.now())) {
+            if (info.lockUntil.isAfter(AppTime.now())) {
                 return true;
             }
             // Lock has expired — wipe the entry so the next failure starts fresh.
@@ -53,7 +55,7 @@ public class LoginAttemptService {
         synchronized (info) {
             info.attemptCount++;
             if (info.attemptCount >= MAX_ATTEMPTS) {
-                info.lockUntil = LocalDateTime.now().plusMinutes(LOCK_DURATION_MINUTES);
+                info.lockUntil = AppTime.now().plusMinutes(LOCK_DURATION_MINUTES);
                 log.warn("Account locked due to too many failed attempts: {}", mobile);
             }
         }

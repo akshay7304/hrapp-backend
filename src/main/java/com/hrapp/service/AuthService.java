@@ -11,6 +11,7 @@ import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.repository.UserRoleRepository;
+import com.hrapp.security.AccountAccessService;
 import com.hrapp.security.JwtUtil;
 import com.hrapp.security.LoginAttemptService;
 import com.hrapp.security.SecurityUtil;
@@ -22,8 +23,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 
 /**
  * Handles login and refresh-token exchange. Both flows produce a brand new
@@ -34,24 +33,13 @@ import java.util.Map;
 @Slf4j
 public class AuthService {
 
-    /**
-     * Status names that block login. Keys are lower-cased for case-insensitive lookup.
-     * Any status not present here is treated as login-eligible — so Active, Probation,
-     * On Notice Period, and Contract all pass through.
-     */
-    private static final Map<String, String> BLOCKED_STATUS_MESSAGES = Map.of(
-            "terminated", "Your account has been terminated",
-            "resigned",   "Your account has been resigned",
-            "suspended",  "Your account has been suspended",
-            "inactive",   "Your account is inactive"
-    );
-
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final LoginAttemptService loginAttemptService;
     private final TokenRevocationService tokenRevocationService;
+    private final AccountAccessService accountAccessService;
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
@@ -167,22 +155,10 @@ public class AuthService {
     }
 
     private void ensureLoginAllowed(User user) {
-        Company company = user.getCompany();
-        if (company != null && Boolean.FALSE.equals(company.getIsActive())) {
-            log.warn("Login blocked — company inactive for user {}", user.getMobile());
-            throw new UnauthorizedException("Your company account is inactive — contact support");
-        }
-
-        String statusName = user.getStatus() != null ? user.getStatus().getName() : null;
-        if (statusName == null) {
-            log.warn("Login blocked — user {} has no status assigned", user.getMobile());
-            throw new UnauthorizedException("Your account has no status — contact your administrator");
-        }
-        String blockedMessage = BLOCKED_STATUS_MESSAGES.get(statusName.trim().toLowerCase(Locale.ROOT));
-        if (blockedMessage != null) {
-            log.warn("Login blocked — user {} has status '{}'", user.getMobile(), statusName);
-            throw new UnauthorizedException(blockedMessage);
-        }
+        accountAccessService.accessDeniedReason(user).ifPresent(msg -> {
+            log.warn("Login blocked — user {} — {}", user.getMobile(), msg);
+            throw new UnauthorizedException(msg);
+        });
     }
 
     private List<String> fetchRoleNames(Long userId) {

@@ -39,6 +39,14 @@ public class TokenRevocationService {
         });
     }
 
+    @Transactional
+    public void revokeAllForCompany(Long companyId) {
+        if (companyId == null) {
+            return;
+        }
+        userRepository.findByCompanyId(companyId).forEach(user -> revokeAllForUser(user.getId()));
+    }
+
     public boolean isRevoked(Long userId, Instant issuedAt) {
         if (userId == null || issuedAt == null) {
             return false;

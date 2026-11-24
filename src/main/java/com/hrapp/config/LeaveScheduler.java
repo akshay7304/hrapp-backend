@@ -8,7 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDate;
+import com.hrapp.util.AppTime;
+
 import java.util.List;
 
 /**
@@ -25,9 +26,9 @@ public class LeaveScheduler {
     private final LeaveService leaveService;
     private final CompanyRepository companyRepository;
 
-    @Scheduled(cron = "0 0 1 1 1 *")
+    @Scheduled(cron = "0 0 1 1 1 *", zone = "Asia/Kolkata")
     public void runYearEndCarryForward() {
-        int previousYear = LocalDate.now().getYear() - 1;
+        int previousYear = AppTime.currentYear() - 1;
         log.info("Year-end carry-forward starting for year={}", previousYear);
 
         List<Company> activeCompanies = companyRepository.findByIsActive(true);

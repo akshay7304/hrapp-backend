@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,15 +16,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 
 /**
- * Reads {@code Authorization: Bearer <token>}, validates it, and populates
- * the {@link SecurityContextHolder} with an {@link AuthenticatedUser} principal
- * built straight from the JWT's claims — no DB lookup per request.
- * <p>
- * Refresh tokens are explicitly rejected so they can never be used to
- * authenticate normal API calls.
+ * Reads {@code Authorization: Bearer <token>}, validates it, checks revocation
+ * and live account/company status, then populates {@link SecurityContextHolder}.
+ * Refresh tokens are rejected for normal API calls.
  */
 @Component
 @RequiredArgsConstructor
@@ -35,6 +35,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final TokenRevocationService tokenRevocationService;
+    private final AccountAccessService accountAccessService;
 
     /**
      * server.servlet.context-path is {@code /api/v1}, so the servlet path here
@@ -67,7 +68,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Long userId = jwtUtil.extractUserId(token);
                 if (tokenRevocationService.isRevoked(userId, jwtUtil.extractIssuedAt(token))) {
                     log.debug("Rejected revoked JWT for userId={}", userId);
-                    filterChain.doFilter(request, response);
+                    writeUnauthorized(response, "Session revoked — please login again");
+                    return;
+                }
+
+                Optional<String> denied = accountAccessService.accessDeniedReason(userId);
+                if (denied.isPresent()) {
+                    log.debug("Rejected JWT for userId={} — {}", userId, denied.get());
+                    writeUnauthorized(response, denied.get());
                     return;
                 }
 
@@ -94,6 +102,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private void writeUnauthorized(HttpServletResponse response, String message) throws IOException {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        String safe = message == null ? "Unauthorized" : message.replace("\"", "'");
+        response.getWriter().write(
+                "{\"success\":false,\"message\":\"" + safe + "\",\"data\":null,\"errors\":null}");
     }
 
     private String resolveToken(HttpServletRequest request) {

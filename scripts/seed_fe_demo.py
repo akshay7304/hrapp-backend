@@ -92,7 +92,8 @@ def month_days(year: int, month: int) -> list[date]:
 
 
 def is_weekend(d: date) -> bool:
-    return d.weekday() >= 5  # Sat/Sun
+    # Align with company_settings.week_off_day = SUNDAY (runtime seed default).
+    return d.weekday() == 6  # Sunday
 
 
 def prev_month(y: int, m: int) -> tuple[int, int]:
@@ -164,12 +165,26 @@ def seed(conn) -> None:
           overtime_after_hours, late_mark_after_minutes, week_off_day, leave_count_type,
           device_brand, device_secret, device_serial
         ) VALUES (
-          %s, '09:30:00', '18:30:00', 9.00, 4.50, 9.00, 15,
-          'SATURDAY,SUNDAY', 'EXCLUDE_WEEK_OFF_AND_HOLIDAYS',
+          %s, '09:00:00', '18:00:00', 9.00, 4.50, 9.00, 15,
+          'SUNDAY', 'EXCLUDE_WEEK_OFF_AND_HOLIDAYS',
           'ZKTECO', %s, 'DEMO-SN-001'
         )
         """,
         (company_id, secret),
+    )
+
+    # Default shift master (Phase 5) — attendance resolve must not use settings alone.
+    cur.execute(
+        """
+        INSERT INTO shifts (
+          company_id, name, start_time, end_time, is_overnight, grace_late_minutes,
+          full_day_hours, half_day_hours, break_minutes, break_paid, is_default, is_active
+        ) VALUES (
+          %s, 'General', '09:00:00', '18:00:00', FALSE, 15,
+          9.00, 4.50, 60, FALSE, TRUE, TRUE
+        )
+        """,
+        (company_id,),
     )
 
     # ── Org structure ──────────────────────────────────────────

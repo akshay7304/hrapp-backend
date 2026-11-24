@@ -1,11 +1,12 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.request.AssignShiftRequest;
 import com.hrapp.dto.response.ResolvedShiftResponse;
 import com.hrapp.dto.response.ShiftAssignmentResponse;
 import com.hrapp.dto.response.ShiftResponse;
 import com.hrapp.entity.Company;
-import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.Shift;
 import com.hrapp.entity.ShiftAssignment;
 import com.hrapp.entity.User;
@@ -14,7 +15,6 @@ import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.repository.CompanyRepository;
-import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.ShiftAssignmentRepository;
 import com.hrapp.repository.ShiftRepository;
 import com.hrapp.repository.UserRepository;
@@ -28,8 +28,8 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Phase 2 — fixed shift assignment with effective dating, plus resolve-for-date
- * (assignment → company default → legacy company_settings).
+ * Fixed shift assignment with effective dating, plus resolve-for-date
+ * (assignment → company default → NONE). Company settings are not a shift source.
  */
 @Service
 @RequiredArgsConstructor
@@ -42,7 +42,6 @@ public class ShiftAssignmentService {
     private final ShiftRepository shiftRepository;
     private final UserRepository userRepository;
     private final CompanyRepository companyRepository;
-    private final CompanySettingsRepository companySettingsRepository;
 
     @Transactional
     public ShiftAssignmentResponse assignShift(Long companyId, AssignShiftRequest request) {
@@ -112,7 +111,7 @@ public class ShiftAssignmentService {
         ensureUserInCompany(user, effectiveCompanyId);
         ensureCanViewUser(userId);
 
-        LocalDate onDate = date != null ? date : LocalDate.now();
+        LocalDate onDate = date != null ? date : AppTime.today();
         return resolveInternal(user, effectiveCompanyId, onDate);
     }
 
@@ -128,7 +127,22 @@ public class ShiftAssignmentService {
         }
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
-        LocalDate onDate = date != null ? date : LocalDate.now();
+        LocalDate onDate = date != null ? date : AppTime.today();
+        return resolveInternal(user, companyId, onDate);
+    }
+
+    /**
+     * Trusted internal resolve for attendance / thumb / schedulers — no
+     * caller-permission check (the calling service already scoped the tenant).
+     */
+    @Transactional(readOnly = true)
+    public ResolvedShiftResponse resolveForSystem(Long companyId, Long userId, LocalDate date) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
+        if (user.getCompany() == null || !companyId.equals(user.getCompany().getId())) {
+            throw new UnauthorizedException("Employee does not belong to this company");
+        }
+        LocalDate onDate = date != null ? date : AppTime.today();
         return resolveInternal(user, companyId, onDate);
     }
 
@@ -149,7 +163,7 @@ public class ShiftAssignmentService {
                         .assignmentEffectiveFrom(sa.getEffectiveFrom())
                         .build();
             }
-            // Assignment points at deactivated shift — fall through to default/settings
+            // Assignment points at deactivated shift — fall through to company default
             log.warn("Effective assignment id={} points at inactive shift id={} — falling back",
                     sa.getId(), shift.getId());
         }
@@ -164,38 +178,11 @@ public class ShiftAssignmentService {
                     .build();
         }
 
-        return companySettingsRepository.findByCompanyId(companyId)
-                .map(settings -> ResolvedShiftResponse.builder()
-                        .userId(user.getId())
-                        .date(onDate)
-                        .source(ShiftResolveSource.COMPANY_SETTINGS)
-                        .shift(fromCompanySettings(companyId, settings))
-                        .build())
-                .orElseGet(() -> ResolvedShiftResponse.builder()
-                        .userId(user.getId())
-                        .date(onDate)
-                        .source(ShiftResolveSource.NONE)
-                        .shift(null)
-                        .build());
-    }
-
-    private ShiftResponse fromCompanySettings(Long companyId, CompanySettings settings) {
-        return ShiftResponse.builder()
-                .id(null)
-                .companyId(companyId)
-                .name("Company default (settings)")
-                .startTime(settings.getShiftStartTime())
-                .endTime(settings.getShiftEndTime())
-                .isOvernight(false)
-                .graceLateMinutes(settings.getLateMarkAfterMinutes())
-                .fullDayHours(settings.getShiftHours())
-                .halfDayHours(settings.getHalfDayHours())
-                .breakMinutes(0)
-                .breakPaid(false)
-                .isDefault(true)
-                .isActive(true)
-                .createdAt(null)
-                .updatedAt(null)
+        return ResolvedShiftResponse.builder()
+                .userId(user.getId())
+                .date(onDate)
+                .source(ShiftResolveSource.NONE)
+                .shift(null)
                 .build();
     }
 
@@ -213,7 +200,7 @@ public class ShiftAssignmentService {
 
     private void ensureUserInCompany(User user, Long companyId) {
         if (user.getCompany() == null || !companyId.equals(user.getCompany().getId())) {
-            throw new BadRequestException("Employee does not belong to this company");
+            throw new UnauthorizedException("Employee does not belong to this company");
         }
     }
 

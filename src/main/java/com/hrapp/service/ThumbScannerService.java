@@ -3,6 +3,8 @@ package com.hrapp.service;
 import com.hrapp.dto.request.EsslLogRequest;
 import com.hrapp.dto.request.GenericLogRequest;
 import com.hrapp.dto.request.ZktecoLogRequest;
+import com.hrapp.dto.response.ResolvedShiftResponse;
+import com.hrapp.dto.response.ShiftResponse;
 import com.hrapp.dto.response.ThumbLogResponse;
 import com.hrapp.dto.response.ThumbProcessResult;
 import com.hrapp.entity.Attendance;
@@ -23,6 +25,7 @@ import com.hrapp.repository.ThumbLogRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import com.hrapp.util.AttendanceDuration;
+import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -41,6 +44,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -75,8 +79,8 @@ public class ThumbScannerService {
     private final CompanySettingsRepository companySettingsRepository;
     private final AttendanceRepository attendanceRepository;
     private final AttendancePunchRepository attendancePunchRepository;
+    private final ShiftAssignmentService shiftAssignmentService;
     private final PlatformTransactionManager transactionManager;
-    @SuppressWarnings("unused") // wired per spec for future holiday-aware overrides
     private final com.hrapp.repository.HolidayRepository holidayRepository;
 
     // ============================================================
@@ -167,10 +171,18 @@ public class ThumbScannerService {
                     .build();
         }
 
-        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
-                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
-
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
+
+        CompanySettings companySettings = companySettingsRepository.findByCompanyId(companyId)
+                .orElse(null);
+        Set<LocalDate> holidays = holidayRepository
+                .findByCompanyIdAndHolidayDateBetween(
+                        companyId,
+                        pending.get(0).getPunchTime().toLocalDate().minusDays(1),
+                        pending.get(pending.size() - 1).getPunchTime().toLocalDate().plusDays(1))
+                .stream()
+                .map(com.hrapp.entity.Holiday::getHolidayDate)
+                .collect(Collectors.toSet());
 
         int total = pending.size();
         int successCount = 0;
@@ -211,6 +223,17 @@ public class ThumbScannerService {
                 List<ThumbLog> dateLogs = dateEntry.getValue();
                 dateLogs.sort(Comparator.comparing(ThumbLog::getPunchTime));
 
+                // Align with web check-in: no attendance on week-off / holiday.
+                boolean nonWorking = (companySettings != null
+                        && WeekOffSupport.isWeekOff(date, companySettings.getWeekOffDay()))
+                        || holidays.contains(date);
+                if (nonWorking) {
+                    skippedCount += dateLogs.size();
+                    dateLogs.forEach(l -> l.setIsProcessed(true));
+                    thumbLogRepository.saveAll(dateLogs);
+                    continue;
+                }
+
                 ThumbLog firstIn = dateLogs.stream()
                         .filter(l -> l.getPunchType() == PunchType.IN)
                         .findFirst()
@@ -233,7 +256,7 @@ public class ThumbScannerService {
                 final ThumbLog lastOutFinal = lastOut;
                 try {
                     tx.executeWithoutResult(status -> {
-                        upsertAttendance(user, company, date, firstInFinal, lastOutFinal, settings);
+                        upsertAttendance(user, company, date, dateLogs, firstInFinal, lastOutFinal);
                         dateLogs.forEach(l -> l.setIsProcessed(true));
                         thumbLogRepository.saveAll(dateLogs);
                     });
@@ -374,8 +397,7 @@ public class ThumbScannerService {
      * so re-running the processor on the same data is idempotent.
      */
     private void upsertAttendance(User user, Company company, LocalDate date,
-                                  ThumbLog firstIn, ThumbLog lastOut,
-                                  CompanySettings settings) {
+                                  List<ThumbLog> dateLogs, ThumbLog firstIn, ThumbLog lastOut) {
         Attendance attendance = attendanceRepository
                 .findByUserIdAndAttendanceDate(user.getId(), date)
                 .orElseGet(() -> Attendance.builder()
@@ -400,23 +422,29 @@ public class ThumbScannerService {
             }
         }
 
-        if (attendance.getCheckOut() != null && attendance.getCheckIn() != null) {
-            long workedSeconds = AttendanceDuration.between(attendance.getCheckIn(), attendance.getCheckOut());
-            long overtimeSeconds = AttendanceDuration.overtimeSeconds(
-                    workedSeconds, settings.getOvertimeAfterHours());
-            attendance.setWorkedSeconds(workedSeconds);
-            attendance.setOvertimeSeconds(overtimeSeconds);
-            attendance.setWorkedHours(AttendanceDuration.toPayrollHours(workedSeconds));
-            attendance.setOvertimeHours(AttendanceDuration.toPayrollHours(overtimeSeconds));
-            attendance.setStatus(AttendanceDuration.deriveStatus(
-                    workedSeconds, settings.getShiftHours(), settings.getHalfDayHours()));
+        attendance = attendanceRepository.save(attendance);
+        for (ThumbLog logEntry : dateLogs) {
+            ensurePunch(attendance, user, logEntry.getPunchTime(), logEntry.getPunchType());
         }
 
-        attendance = attendanceRepository.save(attendance);
-        ensurePunch(attendance, user, firstIn.getPunchTime(), PunchType.IN);
-        if (lastOut != null) {
-            ensurePunch(attendance, user, lastOut.getPunchTime(), PunchType.OUT);
+        List<AttendancePunch> punches = attendancePunchRepository
+                .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
+        long workedSeconds = AttendanceDuration.sumPairedSeconds(punches);
+        attendance.setWorkedSeconds(workedSeconds);
+        attendance.setOvertimeSeconds(0L);
+        attendance.setWorkedHours(AttendanceDuration.toPayrollHours(workedSeconds));
+        attendance.setOvertimeHours(BigDecimal.ZERO.setScale(2));
+
+        if (attendance.getCheckOut() != null) {
+            ResolvedShiftResponse resolved = shiftAssignmentService.resolveForSystem(
+                    company.getId(), user.getId(), date);
+            ShiftResponse shift = resolved.getShift();
+            BigDecimal fullDay = shift != null ? shift.getFullDayHours() : null;
+            BigDecimal halfDay = shift != null ? shift.getHalfDayHours() : null;
+            attendance.setStatus(AttendanceDuration.deriveStatus(workedSeconds, fullDay, halfDay));
         }
+
+        attendanceRepository.save(attendance);
     }
 
     private void ensurePunch(Attendance attendance, User user,

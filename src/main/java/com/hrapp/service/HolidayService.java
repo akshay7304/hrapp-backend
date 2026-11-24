@@ -1,5 +1,7 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.request.BulkHolidayRequest;
 import com.hrapp.dto.request.HolidayRequest;
 import com.hrapp.dto.request.ImportHolidayPresetsRequest;
@@ -74,7 +76,7 @@ public class HolidayService {
      */
     @Transactional(readOnly = true)
     public List<HolidayPresetResponse> getPresets(Long companyId, Integer year) {
-        int effectiveYear = year != null ? year : LocalDate.now().getYear();
+        int effectiveYear = year != null ? year : AppTime.today().getYear();
         requireSupportedYear(effectiveYear);
         Long effectiveCompanyId = resolveCompanyId(companyId);
 
@@ -180,8 +182,10 @@ public class HolidayService {
     private Long resolveCompanyId(Long pathCompanyId) {
         if (SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
             if (pathCompanyId == null) {
-                throw new ResourceNotFoundException("Company not found");
+                throw new BadRequestException("companyId is required");
             }
+            companyRepository.findById(pathCompanyId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
             return pathCompanyId;
         }
         Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();

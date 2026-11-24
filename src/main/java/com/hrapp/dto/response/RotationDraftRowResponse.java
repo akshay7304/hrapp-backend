@@ -1,0 +1,23 @@
+package com.hrapp.dto.response;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class RotationDraftRowResponse {
+
+    private Long userId;
+    private String fullName;
+    private String empCode;
+    private Long currentShiftId;
+    private String currentShiftName;
+    private Long proposedShiftId;
+    private String proposedShiftName;
+}

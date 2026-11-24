@@ -1,5 +1,7 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.response.AttendanceResponse;
 import com.hrapp.dto.response.HolidayResponse;
 import com.hrapp.dto.response.HomeMeMonthSummaryResponse;
@@ -43,6 +45,7 @@ import java.time.YearMonth;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Single home-screen aggregate. Role comes from the JWT; EMPLOYEE gets {@code me}
@@ -70,6 +73,7 @@ public class HomeService {
     private final HolidayRepository holidayRepository;
     private final ThumbLogRepository thumbLogRepository;
     private final SalaryPaymentRepository salaryPaymentRepository;
+    private final ShiftAssignmentService shiftAssignmentService;
 
     @Transactional(readOnly = true)
     public HomeResponse getHome() {
@@ -104,12 +108,12 @@ public class HomeService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = AppTime.today();
         YearMonth currentMonth = YearMonth.from(today);
         int year = today.getYear();
 
         AttendanceResponse todayAttendance = attendanceService.findTodayAttendanceOptional().orElse(null);
-        HomeMeShiftResponse shift = buildShift(companyId);
+        HomeMeShiftResponse shift = buildShift(companyId, userId);
         HomeMeMonthSummaryResponse monthSummary = buildMonthSummary(userId, currentMonth);
         List<LeaveBalanceResponse> leaveBalances = leaveService.getMyLeaveBalances(year);
         long pendingLeavesCount = leaveRequestRepository.countByUserIdAndStatus(
@@ -142,7 +146,7 @@ public class HomeService {
         Company company = companyRepository.findById(companyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = AppTime.today();
         YearMonth currentMonth = YearMonth.from(today);
 
         long totalActiveEmployees = userRepository.countByCompanyIdAndStatus_Name(
@@ -226,23 +230,58 @@ public class HomeService {
                 .build();
     }
 
-    private HomeMeShiftResponse buildShift(Long companyId) {
-        return companySettingsRepository.findByCompanyId(companyId)
-                .map(settings -> HomeMeShiftResponse.builder()
-                        .shiftStartTime(settings.getShiftStartTime())
-                        .shiftEndTime(settings.getShiftEndTime())
-                        .build())
-                .orElse(null);
+    private HomeMeShiftResponse buildShift(Long companyId, Long userId) {
+        var resolved = shiftAssignmentService.resolveForSystem(companyId, userId, AppTime.today());
+        if (resolved.getShift() == null) {
+            return null;
+        }
+        return HomeMeShiftResponse.builder()
+                .shiftId(resolved.getShift().getId())
+                .shiftName(resolved.getShift().getName())
+                .source(resolved.getSource() != null ? resolved.getSource().name() : null)
+                .shiftStartTime(resolved.getShift().getStartTime())
+                .shiftEndTime(resolved.getShift().getEndTime())
+                .graceLateMinutes(resolved.getShift().getGraceLateMinutes())
+                .build();
     }
 
     private HomeMeMonthSummaryResponse buildMonthSummary(Long userId, YearMonth month) {
+        LocalDate from = month.atDay(1);
+        LocalDate to = month.atEndOfMonth();
         Map<AttendanceStatus, Integer> counts = new EnumMap<>(AttendanceStatus.class);
         for (Object[] row : attendanceRepository.countStatusByUserIdAndAttendanceDateBetween(
-                userId, month.atDay(1), month.atEndOfMonth())) {
+                userId, from, to)) {
             if (row[0] == null) {
                 continue;
             }
             counts.put((AttendanceStatus) row[0], ((Number) row[1]).intValue());
+        }
+
+        // Week-off / holiday KPIs from calendar (not only attendance status rows).
+        int weekOffDays = 0;
+        int holidayDays = 0;
+        Long companyId = SecurityUtil.getCurrentUserCompanyId();
+        if (companyId != null) {
+            var settingsOpt = companySettingsRepository.findByCompanyId(companyId);
+            Set<LocalDate> holidays = holidayRepository
+                    .findByCompanyIdAndHolidayDateBetween(companyId, from, to).stream()
+                    .map(Holiday::getHolidayDate)
+                    .collect(java.util.stream.Collectors.toSet());
+            LocalDate cursor = from;
+            while (!cursor.isAfter(to)) {
+                boolean weekOff = settingsOpt.isPresent()
+                        && com.hrapp.util.WeekOffSupport.isWeekOff(
+                        cursor, settingsOpt.get().getWeekOffDay());
+                if (weekOff) {
+                    weekOffDays++;
+                } else if (holidays.contains(cursor)) {
+                    holidayDays++;
+                }
+                cursor = cursor.plusDays(1);
+            }
+        } else {
+            weekOffDays = counts.getOrDefault(AttendanceStatus.WEEK_OFF, 0);
+            holidayDays = counts.getOrDefault(AttendanceStatus.HOLIDAY, 0);
         }
 
         return HomeMeMonthSummaryResponse.builder()
@@ -252,8 +291,8 @@ public class HomeService {
                 .absentDays(counts.getOrDefault(AttendanceStatus.ABSENT, 0))
                 .halfDays(counts.getOrDefault(AttendanceStatus.HALF_DAY, 0))
                 .onLeaveDays(counts.getOrDefault(AttendanceStatus.ON_LEAVE, 0))
-                .weekOffDays(counts.getOrDefault(AttendanceStatus.WEEK_OFF, 0))
-                .holidayDays(counts.getOrDefault(AttendanceStatus.HOLIDAY, 0))
+                .weekOffDays(weekOffDays)
+                .holidayDays(holidayDays)
                 .build();
     }
 

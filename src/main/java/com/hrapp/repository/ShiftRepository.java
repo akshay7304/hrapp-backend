@@ -23,7 +23,9 @@ public interface ShiftRepository extends JpaRepository<Shift, Long> {
 
     boolean existsByCompanyIdAndNameIgnoreCaseAndIdNot(Long companyId, String name, Long id);
 
-    Optional<Shift> findByCompanyIdAndIsDefaultTrueAndIsActiveTrue(Long companyId);
+    @Query("SELECT s FROM Shift s JOIN FETCH s.company "
+            + "WHERE s.company.id = :companyId AND s.isDefault = true AND s.isActive = true")
+    Optional<Shift> findByCompanyIdAndIsDefaultTrueAndIsActiveTrue(@Param("companyId") Long companyId);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Shift s SET s.isDefault = false "

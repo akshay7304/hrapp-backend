@@ -25,6 +25,7 @@ public class CompanySettingsController {
     private final CompanySettingsService companySettingsService;
 
     @GetMapping("/company/{companyId}")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN','HR')")
     public ResponseEntity<ApiResponse<CompanySettingsResponse>> getSettings(
             @PathVariable Long companyId) {
         CompanySettingsResponse response = companySettingsService.getSettings(companyId);

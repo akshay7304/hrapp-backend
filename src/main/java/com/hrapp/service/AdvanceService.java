@@ -1,5 +1,7 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.request.ActionAdvanceRequest;
 import com.hrapp.dto.request.AdvanceRequest;
 import com.hrapp.dto.response.AdvanceResponse;
@@ -97,7 +99,7 @@ public class AdvanceService {
 
         advance.setStatus(AdvanceStatus.REJECTED);
         advance.setRejectReason(CANCEL_REASON);
-        advance.setActionedAt(LocalDateTime.now());
+        advance.setActionedAt(AppTime.now());
         advance = advanceRepository.save(advance);
         log.info("Advance id={} cancelled by user={}", id, userId);
         return toResponse(advance);
@@ -181,7 +183,7 @@ public class AdvanceService {
         }
 
         advance.setStatus(request.getStatus());
-        advance.setActionedAt(LocalDateTime.now());
+        advance.setActionedAt(AppTime.now());
         advance = advanceRepository.save(advance);
         log.info("Advance id={} {} by user={}", id, request.getStatus(), actionerId);
         return toResponse(advance);

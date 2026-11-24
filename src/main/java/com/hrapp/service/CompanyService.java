@@ -17,6 +17,7 @@ import com.hrapp.entity.Designation;
 import com.hrapp.entity.Holiday;
 import com.hrapp.entity.LeaveType;
 import com.hrapp.entity.Role;
+import com.hrapp.entity.Shift;
 import com.hrapp.entity.User;
 import com.hrapp.entity.UserRole;
 import com.hrapp.entity.UserStatus;
@@ -31,9 +32,12 @@ import com.hrapp.repository.DesignationRepository;
 import com.hrapp.repository.HolidayRepository;
 import com.hrapp.repository.LeaveTypeRepository;
 import com.hrapp.repository.RoleRepository;
+import com.hrapp.repository.ShiftRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.repository.UserRoleRepository;
 import com.hrapp.repository.UserStatusRepository;
+import com.hrapp.security.TokenRevocationService;
+import com.hrapp.util.AppTime;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
@@ -83,12 +87,14 @@ public class CompanyService {
     private final LeaveTypeRepository leaveTypeRepository;
     private final HolidayRepository holidayRepository;
     private final CompanySettingsRepository companySettingsRepository;
+    private final ShiftRepository shiftRepository;
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
     private final RoleRepository roleRepository;
     private final UserStatusRepository userStatusRepository;
     private final LeaveService leaveService;
     private final PasswordEncoder passwordEncoder;
+    private final TokenRevocationService tokenRevocationService;
 
     // ============================================================
     //  Create
@@ -137,7 +143,7 @@ public class CompanyService {
                 .email(request.getAdminEmail())
                 .passwordHash(passwordEncoder.encode(adminTemporaryPassword))
                 .salaryType(SalaryType.MONTHLY)
-                .joiningDate(LocalDate.now())
+                .joiningDate(AppTime.today())
                 .build());
 
         userRoleRepository.save(UserRole.builder()
@@ -211,8 +217,14 @@ public class CompanyService {
     public CompanyResponse updateCompanyStatus(Long id, UpdateCompanyStatusRequest request) {
         Company company = companyRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
+        boolean deactivating = Boolean.FALSE.equals(request.getIsActive())
+                && !Boolean.FALSE.equals(company.getIsActive());
         company.setIsActive(request.getIsActive());
         company = companyRepository.save(company);
+        if (deactivating) {
+            tokenRevocationService.revokeAllForCompany(company.getId());
+            log.info("Revoked tokens for all users of deactivated company id={}", company.getId());
+        }
         log.info("Updated company id={} isActive={}", company.getId(), company.getIsActive());
         return toCompanyResponse(company, (int) userRepository.countByCompanyId(company.getId()));
     }
@@ -228,10 +240,32 @@ public class CompanyService {
         seeded.leaveTypes = seedLeaveTypes(company);
         seeded.holidays = seedHolidays(company);
         seedCompanySettings(company);
+        seedDefaultShift(company);
 
         seeded.departments.forEach(d -> seeded.departmentsByName.put(d.getName(), d));
         seeded.designations.forEach(d -> seeded.designationsByName.put(d.getName(), d));
         return seeded;
+    }
+
+    /**
+     * Phase 5 — every new company gets an active default shift so resolve
+     * never depends on company_settings for attendance thresholds.
+     */
+    private void seedDefaultShift(Company company) {
+        shiftRepository.save(Shift.builder()
+                .company(company)
+                .name("General")
+                .startTime(LocalTime.of(9, 0))
+                .endTime(LocalTime.of(18, 0))
+                .isOvernight(false)
+                .graceLateMinutes(15)
+                .fullDayHours(new BigDecimal("9.00"))
+                .halfDayHours(new BigDecimal("4.50"))
+                .breakMinutes(60)
+                .breakPaid(false)
+                .isDefault(true)
+                .isActive(true)
+                .build());
     }
 
     private List<Department> seedDepartments(Company company) {
@@ -298,7 +332,7 @@ public class CompanyService {
     }
 
     private List<Holiday> seedHolidays(Company company) {
-        int year = LocalDate.now().getYear();
+        int year = AppTime.currentYear();
         // Only fixed Gregorian dates — lunar festivals (Holi, Diwali, Good Friday)
         // move each year and must be set by the company, not hard-coded.
         List<HolidaySeed> seeds = List.of(

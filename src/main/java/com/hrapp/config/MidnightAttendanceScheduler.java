@@ -22,7 +22,7 @@ public class MidnightAttendanceScheduler {
     private final AttendanceService attendanceService;
     private final CompanyRepository companyRepository;
 
-    @Scheduled(cron = "0 59 23 * * *")
+    @Scheduled(cron = "0 59 23 * * *", zone = "Asia/Kolkata")
     public void runAutoCheckout() {
         log.info("Midnight auto-checkout job starting");
 

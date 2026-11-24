@@ -84,6 +84,17 @@ public interface LeaveRequestRepository extends JpaRepository<LeaveRequest, Long
             @Param("from") LocalDate from,
             @Param("to") LocalDate to);
 
+    /** Leaves that overlap the window (not only those that start inside it). */
+    @Query("SELECT lr FROM LeaveRequest lr " +
+            "JOIN FETCH lr.user u " +
+            "JOIN FETCH lr.leaveType " +
+            "LEFT JOIN FETCH lr.actionedBy " +
+            "WHERE u.company.id = :companyId AND lr.fromDate <= :to AND lr.toDate >= :from")
+    List<LeaveRequest> findByUser_CompanyIdAndOverlapping(
+            @Param("companyId") Long companyId,
+            @Param("from") LocalDate from,
+            @Param("to") LocalDate to);
+
     /** Paginated company-scoped lookup by date range. Used by the all-leaves admin view. */
     @EntityGraph(attributePaths = {"user", "leaveType", "actionedBy"})
     Page<LeaveRequest> findByUser_CompanyIdAndFromDateBetween(

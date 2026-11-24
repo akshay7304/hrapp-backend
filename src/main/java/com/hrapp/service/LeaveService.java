@@ -1,5 +1,7 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.request.ActionLeaveRequest;
 import com.hrapp.dto.request.ApplyLeaveRequest;
 import com.hrapp.dto.response.LeaveBalanceResponse;
@@ -92,7 +94,7 @@ public class LeaveService {
             return List.of();
         }
         Long companyId = user.getCompany().getId();
-        int year = LocalDate.now().getYear();
+        int year = AppTime.today().getYear();
 
         List<LeaveType> leaveTypes = leaveTypeRepository.findByCompanyId(companyId);
         for (LeaveType leaveType : leaveTypes) {
@@ -166,7 +168,7 @@ public class LeaveService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = AppTime.today();
         // Past leaves are allowed up to 30 days back (e.g. HR back-filling a
         // sudden sick day); anything older is almost certainly a typo or
         // attempt to retroactively rewrite history.
@@ -199,6 +201,15 @@ public class LeaveService {
 
         CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
                 .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+
+        if (isHalfDay) {
+            List<LocalDate> holidays = fetchHolidayDates(
+                    companyId, request.getFromDate(), request.getFromDate());
+            if (!isCountableLeaveDay(request.getFromDate(), settings, holidays,
+                    resolveCountType(settings.getLeaveCountType()))) {
+                throw new BadRequestException("Half-day leave cannot be applied on a non-working day");
+            }
+        }
 
         BigDecimal totalDays = calculateTotalDays(
                 request.getFromDate(), request.getToDate(), isHalfDay, settings, companyId);
@@ -305,7 +316,7 @@ public class LeaveService {
                 .orElseThrow(() -> new ResourceNotFoundException("Actioning user not found"));
         leaveRequest.setStatus(request.getStatus());
         leaveRequest.setActionedBy(actioner);
-        leaveRequest.setActionedAt(java.time.LocalDateTime.now());
+        leaveRequest.setActionedAt(AppTime.now());
         leaveRequest = leaveRequestRepository.save(leaveRequest);
 
         log.info("Leave id={} {} by user={}", id, request.getStatus(), actionerId);
@@ -365,7 +376,7 @@ public class LeaveService {
 
         leaveRequest.setStatus(LeaveRequestStatus.CANCELLED);
         leaveRequest.setRejectReason(reason);
-        leaveRequest.setActionedAt(java.time.LocalDateTime.now());
+        leaveRequest.setActionedAt(AppTime.now());
         leaveRequest = leaveRequestRepository.save(leaveRequest);
 
         log.info("Leave id={} cancelled ({})", leaveRequest.getId(), reason);
@@ -555,10 +566,12 @@ public class LeaveService {
     void autoUpdateAttendance(User user, LocalDate from, LocalDate to, boolean isHalfDay,
                               CompanySettings settings, List<LocalDate> holidayDates) {
         AttendanceStatus newStatus = isHalfDay ? AttendanceStatus.HALF_DAY : AttendanceStatus.ON_LEAVE;
+        LeaveCountType countType = resolveCountType(settings.getLeaveCountType());
         LocalDate endDate = isHalfDay ? from : to;
         LocalDate cursor = from;
         while (!cursor.isAfter(endDate)) {
-            if (!isWorkingDay(cursor, settings, holidayDates)) {
+            // Stamp the same days that calculateTotalDays charges against balance.
+            if (!isCountableLeaveDay(cursor, settings, holidayDates, countType)) {
                 cursor = cursor.plusDays(1);
                 continue;
             }
@@ -579,6 +592,19 @@ public class LeaveService {
             attendanceRepository.save(attendance);
             cursor = cursor.plusDays(1);
         }
+    }
+
+    private boolean isCountableLeaveDay(LocalDate date, CompanySettings settings,
+                                        List<LocalDate> holidayDates, LeaveCountType countType) {
+        if (countType != LeaveCountType.CALENDAR_DAYS
+                && WeekOffSupport.isWeekOff(date, settings.getWeekOffDay())) {
+            return false;
+        }
+        if (countType == LeaveCountType.EXCLUDE_WEEK_OFF_AND_HOLIDAYS
+                && holidayDates != null && holidayDates.contains(date)) {
+            return false;
+        }
+        return true;
     }
 
     private void restoreAttendance(Long userId, LocalDate from, LocalDate to) {

@@ -2,7 +2,6 @@ package com.hrapp.dto.request;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -13,6 +12,12 @@ import java.math.BigDecimal;
 import java.time.LocalTime;
 import java.util.List;
 
+/**
+ * Company operational settings. Week-off and leave counting are authoritative.
+ * Shift start/end/hours/late/OT fields are legacy display-only after Phase 5 —
+ * attendance uses the shift master / assignments. Send them optionally to keep
+ * existing FE payloads working; omit to leave unchanged.
+ */
 @Getter
 @Setter
 @NoArgsConstructor
@@ -20,25 +25,25 @@ import java.util.List;
 @Builder
 public class CompanySettingsRequest {
 
-    @NotNull(message = "Shift start time is required")
+    /** Legacy — not used for attendance resolve after Phase 5. */
     private LocalTime shiftStartTime;
 
-    @NotNull(message = "Shift end time is required")
+    /** Legacy — not used for attendance resolve after Phase 5. */
     private LocalTime shiftEndTime;
 
-    @NotNull(message = "Shift hours is required")
+    /** Legacy — not used for attendance thresholds after Phase 5. */
     @DecimalMin(value = "1.0", message = "Shift hours must be at least 1.0")
     private BigDecimal shiftHours;
 
-    @NotNull(message = "Half day hours is required")
+    /** Legacy — not used for attendance thresholds after Phase 5. */
     @DecimalMin(value = "0.5", message = "Half day hours must be at least 0.5")
     private BigDecimal halfDayHours;
 
-    @NotNull(message = "Overtime threshold is required")
+    /** Legacy — OT is manual-only; threshold not applied automatically. */
     @DecimalMin(value = "1.0", message = "Overtime threshold must be at least 1.0")
     private BigDecimal overtimeAfterHours;
 
-    @NotNull(message = "Late mark minutes is required")
+    /** Legacy — late uses shift graceLateMinutes. */
     @Min(value = 0, message = "Late mark minutes cannot be negative")
     private Integer lateMarkAfterMinutes;
 

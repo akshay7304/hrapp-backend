@@ -1,9 +1,14 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.request.ManualAttendanceRequest;
+import com.hrapp.dto.request.SetOvertimeRequest;
 import com.hrapp.dto.response.AttendanceResponse;
 import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.PunchResponse;
+import com.hrapp.dto.response.ResolvedShiftResponse;
+import com.hrapp.dto.response.ShiftResponse;
 import com.hrapp.entity.Attendance;
 import com.hrapp.entity.AttendancePunch;
 import com.hrapp.entity.Company;
@@ -34,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -56,13 +62,14 @@ public class AttendanceService {
     private final UserRepository userRepository;
     private final CompanySettingsRepository companySettingsRepository;
     private final HolidayRepository holidayRepository;
+    private final ShiftAssignmentService shiftAssignmentService;
 
     @Transactional
     public AttendanceResponse checkIn() {
         Long userId = requireCallerUserId();
         Long companyId = requireCallerCompanyId();
-        LocalDate today = LocalDate.now();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDate today = AppTime.today();
+        LocalDateTime now = AppTime.now();
 
         if (holidayRepository.existsByCompanyIdAndHolidayDate(companyId, today)) {
             throw new BadRequestException("Cannot check in on holiday");
@@ -137,8 +144,8 @@ public class AttendanceService {
     public AttendanceResponse checkOut() {
         Long userId = requireCallerUserId();
         Long companyId = requireCallerCompanyId();
-        LocalDate today = LocalDate.now();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDate today = AppTime.today();
+        LocalDateTime now = AppTime.now();
 
         Attendance attendance = attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
                 .orElseThrow(() -> new ResourceNotFoundException("No check-in found for today"));
@@ -152,9 +159,6 @@ public class AttendanceService {
         if (!canCheckOut(attendance, lastPunch)) {
             throw new ConflictException("Not checked in. Please check in first.");
         }
-
-        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
-                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
 
         User user = attendance.getUser();
         AttendancePunch punch = AttendancePunch.builder()
@@ -170,7 +174,8 @@ public class AttendanceService {
 
         List<AttendancePunch> punches = new ArrayList<>(existingPunches);
         punches.add(punch);
-        applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), settings);
+        applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches),
+                resolveShift(companyId, userId, today));
 
         attendance = attendanceRepository.save(attendance);
         log.info("Check-out user={} date={} worked={} status={}",
@@ -179,20 +184,12 @@ public class AttendanceService {
     }
 
     /**
-     * Closes open attendance rows at shift end for employees who forgot to check out.
+     * Closes open attendance rows at each employee's resolved shift end.
      * Intended to run nightly via {@link com.hrapp.config.MidnightAttendanceScheduler}.
      */
     @Transactional
     public int autoCheckoutMissed(Long companyId) {
-        LocalDate today = LocalDate.now();
-
-        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
-                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
-
-        if (settings.getShiftEndTime() == null) {
-            log.warn("Auto checkout skipped for companyId={} — shift_end_time not configured", companyId);
-            return 0;
-        }
+        LocalDate today = AppTime.today();
 
         List<Attendance> candidates = attendanceRepository
                 .findByCompanyIdAndAttendanceDateAndCheckInIsNotNull(companyId, today);
@@ -204,7 +201,15 @@ public class AttendanceService {
                 continue;
             }
 
-            LocalDateTime checkOutTime = today.atTime(settings.getShiftEndTime());
+            User user = attendance.getUser();
+            ResolvedShiftResponse resolved = resolveShift(companyId, user.getId(), today);
+            LocalDateTime checkOutTime = shiftEndDateTime(today, resolved);
+            if (checkOutTime == null) {
+                log.debug("Auto checkout skipped attendanceId={} — no resolved shift end",
+                        attendance.getId());
+                continue;
+            }
+
             LocalDateTime checkIn = attendance.getCheckIn();
             // Someone who punched in at/after shift end cannot be closed at
             // shift end — that would produce 0 (or negative) worked hours.
@@ -213,8 +218,6 @@ public class AttendanceService {
                         attendance.getId(), checkIn, checkOutTime);
                 continue;
             }
-
-            User user = attendance.getUser();
 
             AttendancePunch punch = AttendancePunch.builder()
                     .attendance(attendance)
@@ -230,7 +233,7 @@ public class AttendanceService {
 
             List<AttendancePunch> punches = attendancePunchRepository
                     .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
-            applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), settings);
+            applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), resolved);
 
             attendanceRepository.save(attendance);
             processed++;
@@ -249,7 +252,7 @@ public class AttendanceService {
     @Transactional(readOnly = true)
     public Optional<AttendanceResponse> findTodayAttendanceOptional() {
         Long userId = requireCallerUserId();
-        LocalDate today = LocalDate.now();
+        LocalDate today = AppTime.today();
         return attendanceRepository.findByUserIdAndAttendanceDate(userId, today)
                 .map(this::toResponse);
     }
@@ -272,7 +275,7 @@ public class AttendanceService {
         Pageable effective = applyDefaultSort(pageable, Sort.by("user.fullName"));
         return PageResponse.from(
                 attendanceRepository
-                        .findByCompanyIdAndAttendanceDate(companyId, LocalDate.now(), effective)
+                        .findByCompanyIdAndAttendanceDate(companyId, AppTime.today(), effective)
                         .map(this::toResponse));
     }
 
@@ -306,6 +309,15 @@ public class AttendanceService {
                 .orElseThrow(() -> new ResourceNotFoundException("Marker user not found"));
 
         Company company = employee.getCompany();
+        CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
+                .orElseThrow(() -> new BadRequestException("Company settings not configured"));
+        LocalDate date = request.getAttendanceDate();
+        if (holidayRepository.existsByCompanyIdAndHolidayDate(companyId, date)) {
+            throw new BadRequestException("Cannot mark attendance on holiday");
+        }
+        if (isWeekOff(date, settings.getWeekOffDay())) {
+            throw new BadRequestException("Cannot mark attendance on week off");
+        }
 
         Attendance attendance = attendanceRepository
                 .findByUserIdAndAttendanceDate(request.getUserId(), request.getAttendanceDate())
@@ -326,9 +338,6 @@ public class AttendanceService {
         attendance.setMarkedBy(marker);
 
         if (request.getCheckIn() != null && request.getCheckOut() != null) {
-            CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
-                    .orElseThrow(() -> new BadRequestException("Company settings not configured"));
-
             attendance = attendanceRepository.save(attendance);
 
             attendancePunchRepository.deleteByAttendanceId(attendance.getId());
@@ -350,7 +359,9 @@ public class AttendanceService {
 
             List<AttendancePunch> punches = attendancePunchRepository
                     .findByAttendanceIdOrderByPunchTimeAsc(attendance.getId());
-            applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches), settings);
+            applyDuration(attendance, AttendanceDuration.sumPairedSeconds(punches),
+                    resolveShift(companyId, employee.getId(), request.getAttendanceDate()));
+            // Manual mark keeps HR-chosen status after duration calc
             attendance.setStatus(request.getStatus());
         } else {
             attendance.setWorkedHours(BigDecimal.ZERO);
@@ -365,6 +376,34 @@ public class AttendanceService {
         attendance = attendanceRepository.save(attendance);
         log.info("Manual attendance marked by={} for user={} date={} status={}",
                 markerId, request.getUserId(), request.getAttendanceDate(), request.getStatus());
+        return toResponse(attendance);
+    }
+
+    /**
+     * Manual OT only — never derived from worked hours vs shift threshold.
+     */
+    @Transactional
+    public AttendanceResponse setOvertime(Long attendanceId, SetOvertimeRequest request) {
+        Long companyId = requireCallerCompanyId();
+        Attendance attendance = attendanceRepository.findById(attendanceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Attendance not found"));
+        User user = attendance.getUser();
+        ensureSameCompany(user, companyId);
+
+        BigDecimal hours = request.getOvertimeHours() != null
+                ? request.getOvertimeHours()
+                : BigDecimal.ZERO;
+        if (hours.signum() < 0) {
+            throw new BadRequestException("overtimeHours cannot be negative");
+        }
+        long seconds = hours.multiply(BigDecimal.valueOf(3600))
+                .setScale(0, java.math.RoundingMode.HALF_UP)
+                .longValue();
+        attendance.setOvertimeSeconds(seconds);
+        attendance.setOvertimeHours(hours.setScale(2, java.math.RoundingMode.HALF_UP));
+        attendance = attendanceRepository.save(attendance);
+        log.info("Manual OT set attendanceId={} hours={} by company={}",
+                attendanceId, hours, companyId);
         return toResponse(attendance);
     }
 
@@ -425,26 +464,51 @@ public class AttendanceService {
         return lastPunch.get().getPunchType() == PunchType.IN;
     }
 
-    private void applyDuration(Attendance attendance, long workedSeconds, CompanySettings settings) {
-        long overtimeSeconds = AttendanceDuration.overtimeSeconds(
-                workedSeconds, settings.getOvertimeAfterHours());
+    /**
+     * Applies worked duration and PRESENT/HALF_DAY/ABSENT from the resolved shift.
+     * Overtime is never auto-calculated — OT is manual-only (Phase 3 lock).
+     */
+    private void applyDuration(Attendance attendance, long workedSeconds, ResolvedShiftResponse resolved) {
         attendance.setWorkedSeconds(workedSeconds);
-        attendance.setOvertimeSeconds(overtimeSeconds);
+        attendance.setOvertimeSeconds(0L);
         attendance.setWorkedHours(AttendanceDuration.toPayrollHours(workedSeconds));
-        attendance.setOvertimeHours(AttendanceDuration.toPayrollHours(overtimeSeconds));
-        attendance.setStatus(AttendanceDuration.deriveStatus(
-                workedSeconds, settings.getShiftHours(), settings.getHalfDayHours()));
+        attendance.setOvertimeHours(BigDecimal.ZERO.setScale(2));
+
+        ShiftResponse shift = resolved != null ? resolved.getShift() : null;
+        BigDecimal fullDay = shift != null ? shift.getFullDayHours() : null;
+        BigDecimal halfDay = shift != null ? shift.getHalfDayHours() : null;
+        attendance.setStatus(AttendanceDuration.deriveStatus(workedSeconds, fullDay, halfDay));
     }
 
-    private long overtimeFromSettings(Attendance attendance, long workedSeconds) {
-        Long companyId = attendance.getCompany() != null ? attendance.getCompany().getId() : null;
-        if (companyId == null) {
-            return safeSeconds(attendance.getOvertimeSeconds());
+    private ResolvedShiftResponse resolveShift(Long companyId, Long userId, LocalDate date) {
+        return shiftAssignmentService.resolveForSystem(companyId, userId, date);
+    }
+
+    private LocalDateTime shiftEndDateTime(LocalDate attendanceDate, ResolvedShiftResponse resolved) {
+        if (resolved == null || resolved.getShift() == null || resolved.getShift().getEndTime() == null) {
+            return null;
         }
-        BigDecimal threshold = companySettingsRepository.findByCompanyId(companyId)
-                .map(CompanySettings::getOvertimeAfterHours)
-                .orElse(null);
-        return AttendanceDuration.overtimeSeconds(workedSeconds, threshold);
+        ShiftResponse shift = resolved.getShift();
+        LocalTime end = shift.getEndTime();
+        if (Boolean.TRUE.equals(shift.getIsOvernight())) {
+            return attendanceDate.plusDays(1).atTime(end);
+        }
+        return attendanceDate.atTime(end);
+    }
+
+    private boolean isLateAgainstShift(LocalDateTime checkIn, LocalDate attendanceDate,
+                                       ResolvedShiftResponse resolved) {
+        if (checkIn == null || resolved == null || resolved.getShift() == null
+                || resolved.getShift().getStartTime() == null) {
+            return false;
+        }
+        int grace = resolved.getShift().getGraceLateMinutes() != null
+                ? resolved.getShift().getGraceLateMinutes()
+                : 0;
+        LocalDateTime lateAfter = attendanceDate
+                .atTime(resolved.getShift().getStartTime())
+                .plusMinutes(grace);
+        return checkIn.isAfter(lateAfter);
     }
 
     private long safeSeconds(Long seconds) {
@@ -503,9 +567,20 @@ public class AttendanceService {
         long workedSeconds = fromPunches
                 ? AttendanceDuration.sumPairedSeconds(punches)
                 : safeSeconds(attendance.getWorkedSeconds());
-        long overtimeSeconds = fromPunches
-                ? overtimeFromSettings(attendance, workedSeconds)
-                : safeSeconds(attendance.getOvertimeSeconds());
+        // Stored OT only — never recompute from shift/settings (manual OT)
+        long overtimeSeconds = safeSeconds(attendance.getOvertimeSeconds());
+
+        Boolean late = null;
+        if (attendance.getCheckIn() != null && user != null && user.getCompany() != null) {
+            try {
+                ResolvedShiftResponse resolved = resolveShift(
+                        user.getCompany().getId(), user.getId(), attendance.getAttendanceDate());
+                late = isLateAgainstShift(
+                        attendance.getCheckIn(), attendance.getAttendanceDate(), resolved);
+            } catch (Exception ex) {
+                log.debug("Late flag skipped for attendanceId={}: {}", attendance.getId(), ex.getMessage());
+            }
+        }
 
         return AttendanceResponse.builder()
                 .id(attendance.getId())
@@ -521,6 +596,7 @@ public class AttendanceService {
                 .source(attendance.getSource() != null ? attendance.getSource().name() : null)
                 .isManual(attendance.getIsManual())
                 .isAutoCheckout(attendance.getIsAutoCheckout())
+                .isLate(late)
                 .manualReason(attendance.getManualReason())
                 .punches(punchResponses)
                 .totalSessions(countCompleteSessions(punches))

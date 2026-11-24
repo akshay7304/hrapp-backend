@@ -1,5 +1,7 @@
 package com.hrapp.service;
 
+import com.hrapp.util.AppTime;
+
 import com.hrapp.dto.request.MarkPaidRequest;
 import com.hrapp.dto.request.RunPayrollRequest;
 import com.hrapp.dto.request.SalaryAdjustmentRequest;
@@ -72,12 +74,12 @@ public class PayrollService {
     private static final String ADJ_TYPE_ADDITION = "ADDITION";
     private static final String ADJ_TYPE_DEDUCTION = "DEDUCTION";
     /**
-     * Statuses that are excluded from a payroll run. Everyone else
-     * (Active, Probation, Inactive, Suspended, On Notice Period, Contract)
-     * receives a payslip so the audit trail covers partial-month edge cases
-     * like notice-period payouts or settlement of suspended employees.
+     * Excluded from payroll runs — aligned with login-blocked statuses
+     * ({@link com.hrapp.security.AccountAccessService#WORKFORCE_EXCLUDED_STATUSES}).
+     * Active / Probation / On Notice Period / Contract still receive payslips.
      */
-    private static final List<String> PAYROLL_EXCLUDED_STATUSES = List.of("Terminated", "Resigned");
+    private static final List<String> PAYROLL_EXCLUDED_STATUSES =
+            List.copyOf(com.hrapp.security.AccountAccessService.WORKFORCE_EXCLUDED_STATUSES);
     private static final BigDecimal HALF = new BigDecimal("0.5");
 
     private final UserRepository userRepository;
@@ -101,7 +103,7 @@ public class PayrollService {
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
         ensureSameCompany(user, companyId);
 
-        LocalDate maxFuture = LocalDate.now().plusYears(1);
+        LocalDate maxFuture = AppTime.today().plusYears(1);
         if (request.getEffectiveFrom().isAfter(maxFuture)) {
             throw new BadRequestException("Effective from cannot be more than 1 year in the future");
         }
@@ -439,8 +441,21 @@ public class PayrollService {
         LocalDate monthStart = ym.atDay(1);
         LocalDate monthEnd = ym.atEndOfMonth();
 
-        List<Attendance> attendance = attendanceRepository
-                .findByUserIdAndAttendanceDateBetween(userId, monthStart, monthEnd);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
+        Long companyId = user.getCompany() != null ? user.getCompany().getId() : null;
+        CompanySettings settings = companyId != null
+                ? companySettingsRepository.findByCompanyId(companyId).orElse(null)
+                : null;
+
+        Set<LocalDate> holidays = companyId != null
+                ? holidayRepository.findByCompanyIdAndHolidayDateBetween(companyId, monthStart, monthEnd)
+                .stream().map(Holiday::getHolidayDate).collect(Collectors.toSet())
+                : Set.of();
+
+        Map<LocalDate, Attendance> byDate = attendanceRepository
+                .findByUserIdAndAttendanceDateBetween(userId, monthStart, monthEnd).stream()
+                .collect(Collectors.toMap(Attendance::getAttendanceDate, a -> a, (a, b) -> a));
         Map<LocalDate, Boolean> leavePaidByDate = buildLeavePaidMap(userId, monthStart, monthEnd);
 
         BigDecimal presentDays = BigDecimal.ZERO;
@@ -451,30 +466,56 @@ public class PayrollService {
         BigDecimal overtimeHours = BigDecimal.ZERO;
         BigDecimal totalWorkedHours = BigDecimal.ZERO;
 
-        for (Attendance a : attendance) {
+        LocalDate cursor = monthStart;
+        while (!cursor.isAfter(monthEnd)) {
+            boolean nonWorking = settings != null
+                    && (com.hrapp.util.WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay())
+                    || holidays.contains(cursor));
+            if (nonWorking) {
+                cursor = cursor.plusDays(1);
+                continue;
+            }
+
+            Attendance a = byDate.get(cursor);
+            if (a == null) {
+                // No row on a working day → treat as absent for salary.
+                absentDays = absentDays.add(BigDecimal.ONE);
+                cursor = cursor.plusDays(1);
+                continue;
+            }
+
             totalWorkedHours = totalWorkedHours.add(nullSafe(a.getWorkedHours()));
             overtimeHours = overtimeHours.add(nullSafe(a.getOvertimeHours()));
 
             AttendanceStatus status = a.getStatus();
             if (status == null) {
-                continue;
-            }
-            switch (status) {
-                case PRESENT -> presentDays = presentDays.add(BigDecimal.ONE);
-                case ABSENT -> absentDays = absentDays.add(BigDecimal.ONE);
-                case HALF_DAY -> halfDays = halfDays.add(BigDecimal.ONE);
-                case ON_LEAVE -> {
-                    Boolean paid = leavePaidByDate.get(a.getAttendanceDate());
-                    if (Boolean.TRUE.equals(paid)) {
-                        paidLeaveDays = paidLeaveDays.add(BigDecimal.ONE);
-                    } else {
-                        unpaidLeaveDays = unpaidLeaveDays.add(BigDecimal.ONE);
+                absentDays = absentDays.add(BigDecimal.ONE);
+            } else {
+                switch (status) {
+                    case PRESENT -> {
+                        // Open check-in (no checkout) must not count as a paid present day.
+                        if (a.getCheckOut() != null) {
+                            presentDays = presentDays.add(BigDecimal.ONE);
+                        } else {
+                            absentDays = absentDays.add(BigDecimal.ONE);
+                        }
+                    }
+                    case ABSENT -> absentDays = absentDays.add(BigDecimal.ONE);
+                    case HALF_DAY -> halfDays = halfDays.add(BigDecimal.ONE);
+                    case ON_LEAVE -> {
+                        Boolean paid = leavePaidByDate.get(a.getAttendanceDate());
+                        if (Boolean.TRUE.equals(paid)) {
+                            paidLeaveDays = paidLeaveDays.add(BigDecimal.ONE);
+                        } else {
+                            unpaidLeaveDays = unpaidLeaveDays.add(BigDecimal.ONE);
+                        }
+                    }
+                    case HOLIDAY, WEEK_OFF -> {
+                        // not earned working days
                     }
                 }
-                case HOLIDAY, WEEK_OFF -> {
-                    // intentionally not counted
-                }
             }
+            cursor = cursor.plusDays(1);
         }
         return AttendanceSummary.builder()
                 .presentDays(scale1(presentDays))

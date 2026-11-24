@@ -4,6 +4,7 @@ import com.hrapp.dto.request.LeaveTypeRequest;
 import com.hrapp.dto.response.LeaveTypeResponse;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.LeaveType;
+import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
@@ -136,8 +137,10 @@ public class LeaveTypeService {
     private Long resolveCompanyId(Long pathCompanyId) {
         if (SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
             if (pathCompanyId == null) {
-                throw new ResourceNotFoundException("Company not found");
+                throw new BadRequestException("companyId is required");
             }
+            companyRepository.findById(pathCompanyId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Company not found"));
             return pathCompanyId;
         }
         Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();

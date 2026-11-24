@@ -31,6 +31,7 @@ import com.hrapp.repository.SalaryAdjustmentRepository;
 import com.hrapp.repository.SalaryPaymentRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
+import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageImpl;
@@ -73,7 +74,7 @@ public class ReportService {
     private static final String ADJ_TYPE_ADDITION = "ADDITION";
     private static final String ADJ_TYPE_DEDUCTION = "DEDUCTION";
     private static final List<String> ATTENDANCE_EXCLUDED_STATUSES =
-            List.of("Terminated", "Resigned");
+            List.copyOf(com.hrapp.security.AccountAccessService.WORKFORCE_EXCLUDED_STATUSES);
 
     private final UserRepository userRepository;
     private final AttendanceRepository attendanceRepository;
@@ -116,8 +117,18 @@ public class ReportService {
     private AttendanceReportResponse buildAttendanceReport(User employee, Integer month, Integer year,
                                                            LocalDate monthStart, LocalDate monthEnd,
                                                            Integer totalWorkingDays) {
-        List<Attendance> records = attendanceRepository
-                .findByUserIdAndAttendanceDateBetween(employee.getId(), monthStart, monthEnd);
+        Long companyId = employee.getCompany() != null ? employee.getCompany().getId() : null;
+        CompanySettings settings = companyId != null
+                ? companySettingsRepository.findByCompanyId(companyId).orElse(null)
+                : null;
+        Set<LocalDate> holidays = companyId != null
+                ? holidayRepository.findByCompanyIdAndHolidayDateBetween(companyId, monthStart, monthEnd)
+                .stream().map(Holiday::getHolidayDate).collect(Collectors.toSet())
+                : Set.of();
+
+        Map<LocalDate, Attendance> byDate = attendanceRepository
+                .findByUserIdAndAttendanceDateBetween(employee.getId(), monthStart, monthEnd).stream()
+                .collect(Collectors.toMap(Attendance::getAttendanceDate, a -> a, (a, b) -> a));
         Map<LocalDate, Boolean> paidLeaveMap =
                 buildLeavePaidMap(employee.getId(), monthStart, monthEnd);
 
@@ -131,31 +142,65 @@ public class ReportService {
         int weekOffDays = 0;
         BigDecimal overtimeHours = BigDecimal.ZERO;
 
-        for (Attendance a : records) {
+        LocalDate cursor = monthStart;
+        while (!cursor.isAfter(monthEnd)) {
+            boolean weekOff = settings != null
+                    && WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay());
+            boolean holiday = holidays.contains(cursor);
+            if (weekOff) {
+                weekOffDays++;
+                cursor = cursor.plusDays(1);
+                continue;
+            }
+            if (holiday) {
+                holidayDays++;
+                cursor = cursor.plusDays(1);
+                continue;
+            }
+
+            Attendance a = byDate.get(cursor);
+            if (a == null) {
+                absentDays = absentDays.add(BigDecimal.ONE);
+                cursor = cursor.plusDays(1);
+                continue;
+            }
+
             overtimeHours = overtimeHours.add(nullSafe(a.getOvertimeHours()));
             AttendanceStatus status = a.getStatus();
             if (status == null) {
-                continue;
-            }
-            switch (status) {
-                case PRESENT -> presentDays = presentDays.add(BigDecimal.ONE);
-                case ABSENT -> absentDays = absentDays.add(BigDecimal.ONE);
-                case HALF_DAY -> halfDays = halfDays.add(BigDecimal.ONE);
-                case ON_LEAVE -> {
-                    onLeaveDays = onLeaveDays.add(BigDecimal.ONE);
-                    if (Boolean.TRUE.equals(paidLeaveMap.get(a.getAttendanceDate()))) {
-                        paidLeaveDays = paidLeaveDays.add(BigDecimal.ONE);
-                    } else {
-                        unpaidLeaveDays = unpaidLeaveDays.add(BigDecimal.ONE);
+                absentDays = absentDays.add(BigDecimal.ONE);
+            } else {
+                switch (status) {
+                    case PRESENT -> {
+                        if (a.getCheckOut() != null) {
+                            presentDays = presentDays.add(BigDecimal.ONE);
+                        } else {
+                            absentDays = absentDays.add(BigDecimal.ONE);
+                        }
                     }
+                    case ABSENT -> absentDays = absentDays.add(BigDecimal.ONE);
+                    case HALF_DAY -> halfDays = halfDays.add(BigDecimal.ONE);
+                    case ON_LEAVE -> {
+                        onLeaveDays = onLeaveDays.add(BigDecimal.ONE);
+                        if (Boolean.TRUE.equals(paidLeaveMap.get(a.getAttendanceDate()))) {
+                            paidLeaveDays = paidLeaveDays.add(BigDecimal.ONE);
+                        } else {
+                            unpaidLeaveDays = unpaidLeaveDays.add(BigDecimal.ONE);
+                        }
+                    }
+                    case HOLIDAY -> holidayDays++;
+                    case WEEK_OFF -> weekOffDays++;
                 }
-                case HOLIDAY -> holidayDays++;
-                case WEEK_OFF -> weekOffDays++;
             }
+            cursor = cursor.plusDays(1);
         }
 
+        // Align with payroll earned days: present + half×0.5 + paid leave.
+        BigDecimal earnedDays = presentDays
+                .add(halfDays.multiply(new BigDecimal("0.5")))
+                .add(paidLeaveDays);
         BigDecimal attendancePercentage = totalWorkingDays > 0
-                ? presentDays.multiply(HUNDRED)
+                ? earnedDays.multiply(HUNDRED)
                 .divide(BigDecimal.valueOf(totalWorkingDays), 2, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
 
@@ -269,7 +314,7 @@ public class ReportService {
 
         List<User> employees = userRepository.findByCompanyId(companyId);
         Map<Long, List<LeaveRequest>> leavesByUser = leaveRequestRepository
-                .findByUser_CompanyIdAndFromDateBetween(companyId, monthStart, monthEnd).stream()
+                .findByUser_CompanyIdAndOverlapping(companyId, monthStart, monthEnd).stream()
                 .collect(Collectors.groupingBy(lr -> lr.getUser().getId()));
 
         List<LeaveReportResponse> all = employees.stream()
