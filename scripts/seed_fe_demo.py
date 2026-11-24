@@ -101,6 +101,25 @@ def prev_month(y: int, m: int) -> tuple[int, int]:
     return y, m - 1
 
 
+def months_back(n: int, from_year: int = YEAR, from_month: int = MONTH) -> list[tuple[int, int]]:
+    """Return [(year, month), ...] for the previous n calendar months (oldest first)."""
+    y, m = from_year, from_month
+    out: list[tuple[int, int]] = []
+    for _ in range(n):
+        y, m = prev_month(y, m)
+        out.append((y, m))
+    out.reverse()
+    return out
+
+
+def month_end(y: int, m: int) -> date:
+    return date(y, m, calendar.monthrange(y, m)[1])
+
+
+def joined_by_month_end(joining: date, y: int, m: int) -> bool:
+    return joining <= month_end(y, m)
+
+
 def insert_returning(cur, sql: str, params) -> int:
     cur.execute(sql + " RETURNING id", params)
     return cur.fetchone()[0]
@@ -385,33 +404,34 @@ def seed(conn) -> None:
     add_balances(emp_new, used_cl=0)
 
     # ── Salary structures ──────────────────────────────────────
-    for uid, basic in (
-        (admin_id, 80000),
-        (hr_id, 45000),
-        (emp_full, 55000),
-        (emp_sparse, 40000),
-        (emp_mid, 50000),
-        (emp_leave, 70000),
-        (emp_half, 38000),
-        (emp_new, 42000),
-    ):
-        cur.execute(
+    # (user_id, basic, joining_date, persona) — persona drives payslip day mix
+    finance_users: list[tuple[int, int, date, str]] = [
+        (admin_id, 80000, date(YEAR - 1, 4, 1), "full"),
+        (hr_id, 45000, date(YEAR - 1, 6, 1), "full"),
+        (emp_full, 55000, date(YEAR - 1, 1, 10), "full"),
+        (emp_sparse, 40000, date(YEAR - 1, 8, 1), "sparse"),
+        (emp_mid, 50000, date(YEAR, MONTH, 12) if TODAY.day >= 12 else date(YEAR, MONTH, 1), "mid"),
+        (emp_leave, 70000, date(YEAR - 2, 3, 1), "leavey"),
+        (emp_half, 38000, date(YEAR - 1, 11, 1), "half"),
+        (emp_new, 42000, TODAY - timedelta(days=20), "mid"),
+    ]
+    structure_by_user: dict[int, tuple[int, Decimal, Decimal, Decimal]] = {}
+    for uid, basic, _joining, _persona in finance_users:
+        basic_d = Decimal(basic)
+        hra = basic_d * Decimal("0.4")
+        allowances = Decimal(5000)
+        pf = Decimal(1800)
+        sid = insert_returning(
+            cur,
             """
             INSERT INTO salary_structures (
               user_id, basic, hra, allowances, pf_deduction, other_deductions,
               overtime_rate, effective_from
             ) VALUES (%s,%s,%s,%s,%s,0,%s,%s)
             """,
-            (
-                uid,
-                Decimal(basic),
-                Decimal(basic) * Decimal("0.4"),
-                Decimal(5000),
-                Decimal(1800),
-                Decimal(300),
-                date(YEAR, 1, 1),
-            ),
+            (uid, basic_d, hra, allowances, pf, Decimal(300), date(YEAR, 1, 1)),
         )
+        structure_by_user[uid] = (sid, basic_d, hra, allowances)
 
     # ── Leave requests (past / current / future + all statuses) ─
     def add_leave(
@@ -566,16 +586,46 @@ def seed(conn) -> None:
             ),
         )
 
+    past_months = months_back(4)  # oldest → newest of M-4..M-1
+    m4y, m4m = past_months[0]
+    m3y, m3m = past_months[1]
+    m2y, m2m = past_months[2]
+    m1y, m1m = past_months[3]
+
+    # Current month — pending / open recovery for finance queues
     add_advance(emp_sparse, 5000, "Medical emergency", "APPROVED", month=MONTH, year=YEAR, by=admin_id)
     add_advance(emp_leave, 10000, "Home repair", "APPROVED", month=MONTH, year=YEAR, recovered=True, by=admin_id)
     add_advance(emp_half, 3000, "Travel advance", "REJECTED", reject="Insufficient justification", by=hr_id)
     add_advance(emp_full, 2000, "Festival advance", "PENDING")
     add_advance(emp_new, 1500, "Laptop stand / accessories", "PENDING")
-    # Past month approved
-    py, pm = prev_month(YEAR, MONTH)
-    add_advance(emp_full, 4000, "Last month advance", "APPROVED", month=pm, year=py, recovered=True, by=admin_id)
-    # HR own pending (excluded from HR pending list)
     add_advance(hr_id, 2500, "HR own advance request", "PENDING")
+
+    # Past 4 months — advances for all roles (deduct month = that payslip month)
+    add_advance(admin_id, 8000, "Admin travel advance", "APPROVED", month=m4m, year=m4y, recovered=True, by=admin_id)
+    add_advance(hr_id, 3500, "HR conference fees", "APPROVED", month=m4m, year=m4y, recovered=True, by=admin_id)
+    add_advance(emp_full, 4000, "Festival advance", "APPROVED", month=m3m, year=m3y, recovered=True, by=admin_id)
+    add_advance(emp_sparse, 2500, "Bike repair", "APPROVED", month=m3m, year=m3y, recovered=True, by=hr_id)
+    add_advance(emp_leave, 6000, "Family medical", "APPROVED", month=m2m, year=m2y, recovered=True, by=admin_id)
+    add_advance(emp_half, 2000, "Uniform deposit", "REJECTED", reject="Not covered by policy", by=hr_id)
+    add_advance(admin_id, 5000, "Client visit advance", "APPROVED", month=m2m, year=m2y, recovered=True, by=admin_id)
+    add_advance(hr_id, 1500, "Stationery reimbursement as advance", "APPROVED", month=m1m, year=m1y, recovered=True, by=admin_id)
+    add_advance(emp_full, 4500, "Last month advance", "APPROVED", month=m1m, year=m1y, recovered=True, by=admin_id)
+    add_advance(emp_sparse, 3000, "Rent support", "APPROVED", month=m1m, year=m1y, recovered=False, by=hr_id)
+    if joined_by_month_end(date(YEAR - 1, 11, 1), m2y, m2m):
+        add_advance(emp_half, 1800, "Local travel", "APPROVED", month=m2m, year=m2y, recovered=True, by=hr_id)
+
+    # Map (user_id, year, month) → advance deduction for payslip
+    advance_deduction: dict[tuple[int, int, int], Decimal] = {
+        (admin_id, m4y, m4m): Decimal("8000"),
+        (hr_id, m4y, m4m): Decimal("3500"),
+        (emp_full, m3y, m3m): Decimal("4000"),
+        (emp_sparse, m3y, m3m): Decimal("2500"),
+        (emp_leave, m2y, m2m): Decimal("6000"),
+        (admin_id, m2y, m2m): Decimal("5000"),
+        (hr_id, m1y, m1m): Decimal("1500"),
+        (emp_full, m1y, m1m): Decimal("4500"),
+        (emp_half, m2y, m2m): Decimal("1800"),
+    }
 
     # ── Attendance helpers ─────────────────────────────────────
     holiday_set = {h[0] for h in holidays}
@@ -721,46 +771,121 @@ def seed(conn) -> None:
             ),
         )
 
-    # ── Salary payment sample (prev month DRAFT + one PAID) ────
-    cur.execute("SELECT id FROM salary_structures WHERE user_id=%s", (emp_full,))
-    struct_id = cur.fetchone()[0]
-    cur.execute(
-        """
-        INSERT INTO salary_payments (
-          user_id, salary_structure_id, month, year, working_days,
-          present_days, absent_days, half_days, paid_leave_days, unpaid_leave_days,
-          overtime_hours, overtime_pay, gross_salary, advance_deduction,
-          total_deductions, net_salary, status, generated_by
-        ) VALUES (
-          %s,%s,%s,%s,22, 20,1,1,0,0, 2,600, 62000,4000, 5800, 56200, 'DRAFT', %s
-        )
-        """,
-        (emp_full, struct_id, pm, py, hr_id),
-    )
-    cur.execute("SELECT id FROM salary_structures WHERE user_id=%s", (emp_leave,))
-    struct2 = cur.fetchone()[0]
-    cur.execute(
-        """
-        INSERT INTO salary_payments (
-          user_id, salary_structure_id, month, year, working_days,
-          present_days, absent_days, half_days, paid_leave_days, unpaid_leave_days,
-          overtime_hours, overtime_pay, gross_salary, advance_deduction,
-          total_deductions, net_salary, status, paid_on, generated_by
-        ) VALUES (
-          %s,%s,%s,%s,22, 18,2,0,2,0, 0,0, 78000,0, 3600, 74400, 'PAID', %s, %s
-        )
-        """,
-        (emp_leave, struct2, pm, py, date(py, pm, 28) if pm != 2 else date(py, pm, 27), admin_id),
-    )
+    # ── Payslips: PAID for M-4..M-1 (all roles), DRAFT for current month sample ─
+    def persona_days(persona: str) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+        # present, absent, half, paid_leave, unpaid_leave
+        if persona == "sparse":
+            return Decimal("14"), Decimal("5"), Decimal("1"), Decimal("2"), Decimal("0")
+        if persona == "leavey":
+            return Decimal("16"), Decimal("2"), Decimal("0"), Decimal("4"), Decimal("0")
+        if persona == "half":
+            return Decimal("12"), Decimal("2"), Decimal("6"), Decimal("2"), Decimal("0")
+        if persona == "mid":
+            return Decimal("10"), Decimal("1"), Decimal("0"), Decimal("0"), Decimal("0")
+        # full / admin / hr
+        return Decimal("20"), Decimal("1"), Decimal("1"), Decimal("0"), Decimal("0")
 
-    # Salary adjustment sample
+    def add_payslip(
+        user_id: int,
+        y: int,
+        m: int,
+        *,
+        persona: str,
+        status: str,
+        generated_by: int,
+        paid_on: date | None = None,
+    ) -> None:
+        sid, basic, hra, allowances = structure_by_user[user_id]
+        present, absent, half, paid_leave, unpaid_leave = persona_days(persona)
+        working_days = 22
+        pf = Decimal("1800")
+        adv = advance_deduction.get((user_id, y, m), Decimal("0"))
+        # Pro-rate-ish gross from structure; OT always 0 (manual OT product rule)
+        earned_ratio = (present + half * Decimal("0.5") + paid_leave) / Decimal(working_days)
+        gross = ((basic + hra + allowances) * earned_ratio).quantize(Decimal("0.01"))
+        total_deductions = (pf + adv).quantize(Decimal("0.01"))
+        net = (gross - total_deductions).quantize(Decimal("0.01"))
+        if net < 0:
+            net = Decimal("0.00")
+        cur.execute(
+            """
+            INSERT INTO salary_payments (
+              user_id, salary_structure_id, month, year, working_days,
+              present_days, absent_days, half_days, paid_leave_days, unpaid_leave_days,
+              overtime_hours, overtime_pay, gross_salary, advance_deduction,
+              total_deductions, net_salary, status, paid_on, generated_by
+            ) VALUES (
+              %s,%s,%s,%s,%s, %s,%s,%s,%s,%s, 0,0, %s,%s, %s,%s, %s,%s,%s
+            )
+            """,
+            (
+                user_id,
+                sid,
+                m,
+                y,
+                working_days,
+                present,
+                absent,
+                half,
+                paid_leave,
+                unpaid_leave,
+                gross,
+                adv,
+                total_deductions,
+                net,
+                status,
+                paid_on,
+                generated_by,
+            ),
+        )
+
+    payslip_count = 0
+    for y, m in past_months:
+        for uid, _basic, joining, persona in finance_users:
+            if not joined_by_month_end(joining, y, m):
+                continue
+            gen_by = hr_id if uid == admin_id else admin_id
+            add_payslip(
+                uid,
+                y,
+                m,
+                persona=persona,
+                status="PAID",
+                generated_by=gen_by,
+                paid_on=month_end(y, m),
+            )
+            payslip_count += 1
+
+    # Current month DRAFT — open payroll run sample (not everyone)
+    for uid, persona in ((emp_full, "full"), (hr_id, "full")):
+        add_payslip(
+            uid,
+            YEAR,
+            MONTH,
+            persona=persona,
+            status="DRAFT",
+            generated_by=admin_id,
+            paid_on=None,
+        )
+        payslip_count += 1
+
+    # ── Salary adjustments (current + past months) ─────────────
     cur.execute(
         """
         INSERT INTO salary_adjustments (
           user_id, company_id, month, year, type, amount, reason, created_by
-        ) VALUES (%s,%s,%s,%s,'BONUS',5000,'Diwali performance bonus',%s)
+        ) VALUES
+          (%s,%s,%s,%s,'ADDITION',5000,'Diwali performance bonus',%s),
+          (%s,%s,%s,%s,'ADDITION',3000,'Q performance bonus',%s),
+          (%s,%s,%s,%s,'DEDUCTION',1000,'Laptop damage recovery',%s),
+          (%s,%s,%s,%s,'ADDITION',2000,'Sales target incentive',%s)
         """,
-        (emp_full, company_id, MONTH, YEAR, admin_id),
+        (
+            emp_full, company_id, MONTH, YEAR, admin_id,
+            emp_leave, company_id, m2m, m2y, admin_id,
+            emp_sparse, company_id, m3m, m3y, hr_id,
+            emp_half, company_id, m1m, m1y, hr_id,
+        ),
     )
 
     conn.commit()
@@ -780,8 +905,9 @@ def seed(conn) -> None:
     print(f"{'EMPLOYEE':<12} {'Neha Desai':<18} {MOBILES['emp_leave']:<12} {'EMP006':<8} leave-heavy + paid salary")
     print(f"{'EMPLOYEE':<12} {'Rohit Kulkarni':<18} {MOBILES['emp_half']:<12} {'EMP007':<8} half-days + pending leaves")
     print(f"{'EMPLOYEE':<12} {'Ananya Iyer':<18} {MOBILES['emp_new']:<12} {'EMP008':<8} probation / new joiner")
-    print("\nCovers: home/ops, employees, attendance, leaves (all statuses), advances,")
-    print("payroll/salary, holidays, settings, thumb pending, filters.")
+    print(f"\nFinance: {payslip_count} payslips (PAID for M-4..M-1 all eligible roles; DRAFT current for EMP003+HR),")
+    print("advances across 4 months + current pending, salary adjustments past+current.")
+    print("Also: home/ops, attendance, leaves, holidays, settings, thumb pending.")
 
 
 def main():

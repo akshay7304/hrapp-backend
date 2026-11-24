@@ -71,6 +71,16 @@ public class Attendance {
     @Builder.Default
     private BigDecimal overtimeHours = BigDecimal.ZERO;
 
+    /** Exact worked duration in seconds. This is what the attendance screen shows. */
+    @Column(name = "worked_seconds", nullable = false)
+    @Builder.Default
+    private Long workedSeconds = 0L;
+
+    /** Exact overtime duration in seconds. */
+    @Column(name = "overtime_seconds", nullable = false)
+    @Builder.Default
+    private Long overtimeSeconds = 0L;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     @Builder.Default

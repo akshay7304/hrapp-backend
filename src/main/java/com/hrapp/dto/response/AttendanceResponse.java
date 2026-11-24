@@ -6,7 +6,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,8 +24,10 @@ public class AttendanceResponse {
     private LocalDate attendanceDate;
     private LocalDateTime checkIn;
     private LocalDateTime checkOut;
-    private BigDecimal workedHours;
-    private BigDecimal overtimeHours;
+    /** Exact duration {@code HH:MM:SS}, taken from punch timestamps. */
+    private String workedHours;
+    /** Exact overtime {@code HH:MM:SS}. */
+    private String overtimeHours;
     private String status;
     private String source;
     private Boolean isManual;
