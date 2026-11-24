@@ -267,12 +267,11 @@ public class AttendanceService {
     public PageResponse<AttendanceResponse> getMyAttendanceHistory(int month, int year, Pageable pageable) {
         Long userId = requireCallerUserId();
         YearMonth ym = YearMonth.of(year, month);
+        // Sort + LIMIT/OFFSET applied in Postgres via Pageable — not in memory.
         Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
-        // Month range is ≤31 rows — load once (no COUNT query) then page in memory.
-        List<Attendance> all = attendanceRepository
-                .findByUserIdAndAttendanceDateBetweenOrderByAttendanceDateAsc(
-                        userId, ym.atDay(1), ym.atEndOfMonth());
-        return pageMonthHistory(all, effective);
+        Page<Attendance> page = attendanceRepository.findByUserIdAndAttendanceDateBetween(
+                userId, ym.atDay(1), ym.atEndOfMonth(), effective);
+        return toPageResponse(page, toResponsesFromStoredLate(page.getContent()));
     }
 
     @Transactional(readOnly = true)
@@ -294,10 +293,9 @@ public class AttendanceService {
 
         YearMonth ym = YearMonth.of(year, month);
         Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
-        List<Attendance> all = attendanceRepository
-                .findByUserIdAndAttendanceDateBetweenOrderByAttendanceDateAsc(
-                        employeeId, ym.atDay(1), ym.atEndOfMonth());
-        return pageMonthHistory(all, effective);
+        Page<Attendance> page = attendanceRepository.findByUserIdAndAttendanceDateBetween(
+                employeeId, ym.atDay(1), ym.atEndOfMonth(), effective);
+        return toPageResponse(page, toResponsesFromStoredLate(page.getContent()));
     }
 
     @Transactional
@@ -585,56 +583,6 @@ public class AttendanceService {
             out.add(toResponse(attendance, punches, true));
         }
         return out;
-    }
-
-    private PageResponse<AttendanceResponse> pageMonthHistory(List<Attendance> all, Pageable pageable) {
-        List<Attendance> sorted = sortAttendances(all, pageable.getSort());
-        int total = sorted.size();
-        int pageSize = Math.max(pageable.getPageSize(), 1);
-        int pageNumber = Math.max(pageable.getPageNumber(), 0);
-        int from = pageNumber * pageSize;
-        List<Attendance> slice = from >= total
-                ? List.of()
-                : sorted.subList(from, Math.min(from + pageSize, total));
-        int totalPages = total == 0 ? 0 : (int) Math.ceil((double) total / pageSize);
-        List<AttendanceResponse> content = toResponsesFromStoredLate(slice);
-        return PageResponse.<AttendanceResponse>builder()
-                .content(content)
-                .pageNumber(pageNumber)
-                .pageSize(pageSize)
-                .totalElements(total)
-                .totalPages(totalPages)
-                .isFirst(pageNumber == 0)
-                .isLast(totalPages == 0 || pageNumber >= totalPages - 1)
-                .hasNext(pageNumber + 1 < totalPages)
-                .hasPrevious(pageNumber > 0)
-                .build();
-    }
-
-    private List<Attendance> sortAttendances(List<Attendance> rows, Sort sort) {
-        if (rows == null || rows.isEmpty()) {
-            return List.of();
-        }
-        Sort.Order order = sort != null && sort.isSorted()
-                ? sort.iterator().next()
-                : Sort.Order.asc("attendanceDate");
-        Comparator<Attendance> cmp;
-        String prop = order.getProperty();
-        if ("user.fullName".equals(prop)) {
-            cmp = Comparator.comparing(
-                    a -> a.getUser() != null && a.getUser().getFullName() != null
-                            ? a.getUser().getFullName() : "",
-                    String.CASE_INSENSITIVE_ORDER);
-        } else {
-            cmp = Comparator.comparing(Attendance::getAttendanceDate,
-                    Comparator.nullsLast(Comparator.naturalOrder()));
-        }
-        if (order.isDescending()) {
-            cmp = cmp.reversed();
-        }
-        List<Attendance> copy = new ArrayList<>(rows);
-        copy.sort(cmp);
-        return copy;
     }
 
     private Map<Long, List<AttendancePunch>> loadPunchesGrouped(List<Attendance> rows) {
