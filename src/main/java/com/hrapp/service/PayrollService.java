@@ -5,6 +5,7 @@ import com.hrapp.util.AppTime;
 import com.hrapp.dto.request.MarkPaidRequest;
 import com.hrapp.dto.request.RunPayrollRequest;
 import com.hrapp.dto.request.SalaryAdjustmentRequest;
+import com.hrapp.dto.request.CreateEmployeeSalaryStructureRequest;
 import com.hrapp.dto.request.SalaryStructureRequest;
 import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.SalaryAdjustmentResponse;
@@ -102,21 +103,50 @@ public class PayrollService {
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
         ensureSameCompany(user, companyId);
+        return saveStructure(user, request.getBasic(), request.getHra(), request.getAllowances(),
+                request.getPfDeduction(), request.getOtherDeductions(), request.getOvertimeRate(),
+                request.getEffectiveFrom());
+    }
 
+    /**
+     * Used by employee create — caller already scoped {@code user} to the tenant.
+     * {@code effectiveFrom} defaults to joining date (or today) when null.
+     */
+    @Transactional
+    public SalaryStructureResponse createStructureForNewEmployee(
+            User user, CreateEmployeeSalaryStructureRequest request) {
+        LocalDate effectiveFrom = request.getEffectiveFrom();
+        if (effectiveFrom == null) {
+            effectiveFrom = user.getJoiningDate() != null ? user.getJoiningDate() : AppTime.today();
+        }
+        return saveStructure(user, request.getBasic(), request.getHra(), request.getAllowances(),
+                request.getPfDeduction(), request.getOtherDeductions(), request.getOvertimeRate(),
+                effectiveFrom);
+    }
+
+    private SalaryStructureResponse saveStructure(
+            User user,
+            BigDecimal basic,
+            BigDecimal hra,
+            BigDecimal allowances,
+            BigDecimal pfDeduction,
+            BigDecimal otherDeductions,
+            BigDecimal overtimeRate,
+            LocalDate effectiveFrom) {
         LocalDate maxFuture = AppTime.today().plusYears(1);
-        if (request.getEffectiveFrom().isAfter(maxFuture)) {
+        if (effectiveFrom.isAfter(maxFuture)) {
             throw new BadRequestException("Effective from cannot be more than 1 year in the future");
         }
 
         SalaryStructure structure = SalaryStructure.builder()
                 .user(user)
-                .basic(request.getBasic())
-                .hra(request.getHra())
-                .allowances(request.getAllowances())
-                .pfDeduction(request.getPfDeduction())
-                .otherDeductions(request.getOtherDeductions())
-                .overtimeRate(request.getOvertimeRate())
-                .effectiveFrom(request.getEffectiveFrom())
+                .basic(basic)
+                .hra(hra)
+                .allowances(allowances)
+                .pfDeduction(pfDeduction)
+                .otherDeductions(otherDeductions)
+                .overtimeRate(overtimeRate)
+                .effectiveFrom(effectiveFrom)
                 .build();
         structure = salaryStructureRepository.save(structure);
         log.info("Salary structure id={} created for user={} effectiveFrom={}",

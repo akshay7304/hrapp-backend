@@ -72,6 +72,7 @@ public class EmployeeService {
     private final CompanyRepository companyRepository;
     private final PasswordEncoder passwordEncoder;
     private final LeaveService leaveService;
+    private final PayrollService payrollService;
     private final TokenRevocationService tokenRevocationService;
     private final RoleService roleService;
     private final DepartmentService departmentService;
@@ -149,6 +150,10 @@ public class EmployeeService {
         // user we just persisted is, by construction, in the caller's
         // company, so no extra authorization check is needed.
         leaveService.initializeLeaveBalancesForEmployee(user);
+
+        if (request.getSalaryStructure() != null) {
+            payrollService.createStructureForNewEmployee(user, request.getSalaryStructure());
+        }
 
         log.info("Created employee id={} empCode={} in company={}", user.getId(), user.getEmpCode(), companyId);
         return toResponse(user, List.of(role.getName()), temporaryPassword);

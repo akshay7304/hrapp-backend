@@ -1,6 +1,7 @@
 package com.hrapp.dto.request;
 
 import com.hrapp.enums.SalaryType;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -53,4 +54,11 @@ public class CreateEmployeeRequest {
 
     /** Optional biometric enrol id on the device. */
     private String thumbDeviceId;
+
+    /**
+     * Optional — when present, creates the initial salary structure
+     * in the same request (no separate payroll call needed).
+     */
+    @Valid
+    private CreateEmployeeSalaryStructureRequest salaryStructure;
 }
