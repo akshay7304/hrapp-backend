@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -31,9 +32,11 @@ public class CreateEmployeeRequest {
      * Optional — when blank/null the backend auto-generates a company-unique
      * code (e.g. {@code EMP001}). FE should display the value from the create response.
      */
+    @Size(max = 20, message = "Employee code must be at most 20 characters")
     private String empCode;
 
     @NotBlank(message = "Full name is required")
+    @Size(max = 150, message = "Full name must be at most 150 characters")
     private String fullName;
 
     @NotBlank(message = "Mobile is required")
@@ -41,6 +44,7 @@ public class CreateEmployeeRequest {
     private String mobile;
 
     @Email(message = "Invalid email format")
+    @Size(max = 150, message = "Email must be at most 150 characters")
     private String email;
 
     @NotNull(message = "Salary type is required")
@@ -53,6 +57,7 @@ public class CreateEmployeeRequest {
     private Long roleId;
 
     /** Optional biometric enrol id on the device. */
+    @Size(max = 50, message = "Thumb device id must be at most 50 characters")
     private String thumbDeviceId;
 
     /**

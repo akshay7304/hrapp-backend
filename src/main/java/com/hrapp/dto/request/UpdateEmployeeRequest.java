@@ -2,6 +2,7 @@ package com.hrapp.dto.request;
 
 import com.hrapp.enums.SalaryType;
 import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -25,9 +26,11 @@ public class UpdateEmployeeRequest {
 
     private Long designationId;
 
+    @Size(max = 150, message = "Full name must be at most 150 characters")
     private String fullName;
 
     @Email(message = "Invalid email format")
+    @Size(max = 150, message = "Email must be at most 150 characters")
     private String email;
 
     private SalaryType salaryType;
@@ -38,8 +41,10 @@ public class UpdateEmployeeRequest {
     private Long roleId;
 
     /** Biometric enrol id on the device (maps punches → this user). */
+    @Size(max = 50, message = "Thumb device id must be at most 50 characters")
     private String thumbDeviceId;
 
     /** Profile photo URL (FE/CDN). Blank clears. */
+    @Size(max = 255, message = "Profile photo URL must be at most 255 characters")
     private String profilePicUrl;
 }

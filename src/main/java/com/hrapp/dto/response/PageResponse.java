@@ -55,4 +55,25 @@ public class PageResponse<T> {
                 .hasPrevious(page.hasPrevious())
                 .build();
     }
+
+    /**
+     * Page built from a SQL {@code LIMIT}/{@code OFFSET} query and its matching count.
+     * {@code pageNumber} is 0-based.
+     */
+    public static <T> PageResponse<T> of(List<T> content, int pageNumber, int pageSize, long totalElements) {
+        int totalPages = pageSize <= 0 ? 0 : (int) Math.ceil(totalElements / (double) pageSize);
+        boolean first = pageNumber == 0;
+        boolean hasNext = (long) pageNumber + 1 < totalPages;
+        return PageResponse.<T>builder()
+                .content(content)
+                .pageNumber(pageNumber)
+                .pageSize(pageSize)
+                .totalElements(totalElements)
+                .totalPages(totalPages)
+                .isFirst(first)
+                .isLast(!hasNext)
+                .hasNext(hasNext)
+                .hasPrevious(pageNumber > 0)
+                .build();
+    }
 }
