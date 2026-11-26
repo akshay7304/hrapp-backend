@@ -9,8 +9,6 @@ import com.hrapp.dto.response.SalaryReportResponse;
 import com.hrapp.service.ReportService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,9 +31,8 @@ public class ReportController {
             @RequestParam Integer year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<AttendanceReportResponse> data =
-                reportService.getMonthlyAttendanceReport(month, year, pageable);
+                reportService.getMonthlyAttendanceReport(month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Attendance report generated successfully"));
     }
 
@@ -45,9 +42,8 @@ public class ReportController {
             @RequestParam Integer year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<SalaryReportResponse> data =
-                reportService.getMonthlySalaryReport(month, year, pageable);
+                reportService.getMonthlySalaryReport(month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Salary report generated successfully"));
     }
 
@@ -57,9 +53,8 @@ public class ReportController {
             @RequestParam Integer year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<LeaveReportResponse> data =
-                reportService.getLeaveReport(month, year, pageable);
+                reportService.getLeaveReport(month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave report generated successfully"));
     }
 
@@ -67,8 +62,7 @@ public class ReportController {
     public ResponseEntity<ApiResponse<PageResponse<AdvanceReportResponse>>> getAdvanceReport(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<AdvanceReportResponse> data = reportService.getAdvanceReport(pageable);
+        PageResponse<AdvanceReportResponse> data = reportService.getAdvanceReport(page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Advance report generated successfully"));
     }
 }

@@ -5,15 +5,10 @@ import com.hrapp.dto.request.ManualAttendanceRequest;
 import com.hrapp.dto.request.SetOvertimeRequest;
 import com.hrapp.dto.response.AttendanceResponse;
 import com.hrapp.dto.response.PageResponse;
-import com.hrapp.exception.BadRequestException;
-import com.hrapp.exception.UnauthorizedException;
 import com.hrapp.service.AttendanceService;
-import com.hrapp.security.SecurityUtil;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -81,9 +76,8 @@ public class AttendanceController {
             @RequestParam int year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<AttendanceResponse> history =
-                attendanceService.getMyAttendanceHistory(month, year, pageable);
+                attendanceService.getMyAttendanceHistory(month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(history, "Attendance history retrieved successfully"));
     }
 
@@ -92,8 +86,8 @@ public class AttendanceController {
     public ResponseEntity<ApiResponse<PageResponse<AttendanceResponse>>> getCompanyAttendanceToday(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<AttendanceResponse> attendance = attendanceService.getCompanyAttendanceToday(pageable);
+        PageResponse<AttendanceResponse> attendance =
+                attendanceService.getCompanyAttendanceToday(page, size);
         return ResponseEntity.ok(ApiResponse.success(attendance, "Company attendance retrieved successfully"));
     }
 
@@ -105,9 +99,8 @@ public class AttendanceController {
             @RequestParam int year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<AttendanceResponse> history =
-                attendanceService.getEmployeeAttendanceHistory(employeeId, month, year, pageable);
+                attendanceService.getEmployeeAttendanceHistory(employeeId, month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(history, "Employee attendance history retrieved successfully"));
     }
 
@@ -132,25 +125,9 @@ public class AttendanceController {
     @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN','HR')")
     public ResponseEntity<ApiResponse<String>> triggerAutoCheckout(
             @RequestParam(required = false) Long companyId) {
-        Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();
-        Long effectiveCompanyId;
-        if (SecurityUtil.hasRole("SUPERADMIN")) {
-            effectiveCompanyId = companyId != null ? companyId : callerCompanyId;
-            if (effectiveCompanyId == null) {
-                throw new BadRequestException("companyId is required for SUPERADMIN auto checkout");
-            }
-        } else {
-            if (callerCompanyId == null) {
-                throw new UnauthorizedException("Caller is not bound to a company");
-            }
-            if (companyId != null && !companyId.equals(callerCompanyId)) {
-                throw new UnauthorizedException("Cannot run auto checkout for another company");
-            }
-            effectiveCompanyId = callerCompanyId;
-        }
-        int count = attendanceService.autoCheckoutMissed(effectiveCompanyId);
+        int count = attendanceService.autoCheckoutMissedForCaller(companyId);
         return ResponseEntity.ok(ApiResponse.success(
                 null,
-                "Auto checkout processed " + count + " record(s) for company " + effectiveCompanyId));
+                "Auto checkout processed " + count + " record(s)"));
     }
 }

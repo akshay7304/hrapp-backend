@@ -10,8 +10,6 @@ import com.hrapp.service.AdvanceService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -64,8 +62,7 @@ public class AdvanceController {
     public ResponseEntity<ApiResponse<PageResponse<AdvanceResponse>>> getPendingAdvances(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<AdvanceResponse> data = advanceService.getPendingAdvances(pageable);
+        PageResponse<AdvanceResponse> data = advanceService.getPendingAdvances(page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Pending advances fetched successfully"));
     }
 
@@ -76,9 +73,8 @@ public class AdvanceController {
             @RequestParam(required = false) Long employeeId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<AdvanceResponse> data =
-                advanceService.getCompanyAdvances(status, employeeId, pageable);
+                advanceService.getCompanyAdvances(status, employeeId, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Advances fetched successfully"));
     }
 

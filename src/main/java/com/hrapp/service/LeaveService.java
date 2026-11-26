@@ -26,16 +26,15 @@ import com.hrapp.repository.AttendanceRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.HolidayRepository;
 import com.hrapp.repository.LeaveBalanceRepository;
+import com.hrapp.repository.LeaveJdbcRepository;
 import com.hrapp.repository.LeaveRequestRepository;
+import com.hrapp.repository.LeaveRequestRow;
 import com.hrapp.repository.LeaveTypeRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,11 +64,13 @@ import java.util.stream.Collectors;
 @Slf4j
 public class LeaveService {
 
+    private static final int MAX_PAGE_SIZE = 100;
     private static final List<LeaveRequestStatus> ACTIVE_LEAVE_STATUSES =
             List.of(LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED);
 
     private final LeaveBalanceRepository leaveBalanceRepository;
     private final LeaveRequestRepository leaveRequestRepository;
+    private final LeaveJdbcRepository leaveJdbcRepository;
     private final LeaveTypeRepository leaveTypeRepository;
     private final UserRepository userRepository;
     private final AttendanceRepository attendanceRepository;
@@ -395,7 +396,8 @@ public class LeaveService {
      */
     @Transactional(readOnly = true)
     public PageResponse<LeaveRequestResponse> getMyLeaveRequests(
-            Integer month, Integer year, Pageable pageable) {
+            Integer month, Integer year, int page, int size) {
+        validateLeaveListPage(page, size);
         Long userId = requireCallerUserId();
         if (year == null) {
             throw new BadRequestException("year is required");
@@ -413,47 +415,59 @@ public class LeaveService {
             from = ym.atDay(1);
             to = ym.atEndOfMonth();
         }
-        Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "appliedAt"));
-        return PageResponse.from(
-                leaveRequestRepository
-                        .findByUserIdAndFromDateBetween(userId, from, to, effective)
-                        .map(this::toRequestResponse));
+        long offset = (long) page * size;
+        List<LeaveRequestRow> rows = leaveJdbcRepository
+                .getLeaveRequestsByUserAndFromDateRange(userId, from, to, size, offset);
+        long total = leaveJdbcRepository.getLeaveRequestsByUserAndFromDateRangeCount(userId, from, to);
+        return PageResponse.of(rows.stream().map(this::toLeaveRequestResponse).toList(), page, size, total);
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<LeaveRequestResponse> getPendingLeaveRequests(Pageable pageable) {
+    public PageResponse<LeaveRequestResponse> getPendingLeaveRequests(int page, int size) {
+        validateLeaveListPage(page, size);
         Long companyId = requireCallerCompanyId();
         Long callerId = requireCallerUserId();
-        Pageable effective = applyDefaultSort(pageable, Sort.by("appliedAt"));
+        long offset = (long) page * size;
         // Exclude the caller's own pending leaves — actionLeave already blocks
         // self-approve; hiding them from /pending removes the UI temptation too.
-        return PageResponse.from(
-                leaveRequestRepository
-                        .findByUser_CompanyIdAndStatusAndUser_IdNot(
-                                companyId, LeaveRequestStatus.PENDING, callerId, effective)
-                        .map(this::toRequestResponse));
+        List<LeaveRequestRow> rows = leaveJdbcRepository
+                .getPendingLeaveRequestsByCompanyExcludingUser(companyId, callerId, size, offset);
+        long total = leaveJdbcRepository
+                .getPendingLeaveRequestsByCompanyExcludingUserCount(companyId, callerId);
+        return PageResponse.of(rows.stream().map(this::toLeaveRequestResponse).toList(), page, size, total);
     }
 
     @Transactional(readOnly = true)
     public PageResponse<LeaveRequestResponse> getCompanyLeaveRequests(
             Integer month, Integer year, LeaveRequestStatus status, Long employeeId,
-            Pageable pageable) {
+            int page, int size) {
+        validateLeaveListPage(page, size);
+        if (month == null || year == null) {
+            throw new BadRequestException("month and year are required");
+        }
+        if (month < 1 || month > 12) {
+            throw new BadRequestException("month must be between 1 and 12");
+        }
         Long companyId = requireCallerCompanyId();
         YearMonth ym = YearMonth.of(year, month);
-        Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "appliedAt"));
-        return PageResponse.from(
-                leaveRequestRepository
-                        .findCompanyFiltered(
-                                companyId, ym.atDay(1), ym.atEndOfMonth(),
-                                status, employeeId, effective)
-                        .map(this::toRequestResponse));
+        LocalDate from = ym.atDay(1);
+        LocalDate to = ym.atEndOfMonth();
+        String statusName = status != null ? status.name() : null;
+        long offset = (long) page * size;
+        List<LeaveRequestRow> rows = leaveJdbcRepository.getCompanyLeaveRequestsFiltered(
+                companyId, from, to, statusName, employeeId, size, offset);
+        long total = leaveJdbcRepository.getCompanyLeaveRequestsFilteredCount(
+                companyId, from, to, statusName, employeeId);
+        return PageResponse.of(rows.stream().map(this::toLeaveRequestResponse).toList(), page, size, total);
     }
 
-    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
-        if (pageable.getSort().isSorted()) {
-            return pageable;
+    private static void validateLeaveListPage(int page, int size) {
+        if (page < 0) {
+            throw new BadRequestException("Page must be zero or greater");
         }
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Size must be between 1 and " + MAX_PAGE_SIZE);
+        }
     }
 
     // ============================================================
@@ -717,6 +731,28 @@ public class LeaveService {
                 .actionedByName(actioner != null ? actioner.getFullName() : null)
                 .appliedAt(leaveRequest.getAppliedAt())
                 .actionedAt(leaveRequest.getActionedAt())
+                .build();
+    }
+
+    private LeaveRequestResponse toLeaveRequestResponse(LeaveRequestRow row) {
+        return LeaveRequestResponse.builder()
+                .id(row.id())
+                .userId(row.userId())
+                .fullName(row.fullName())
+                .empCode(row.empCode())
+                .leaveTypeId(row.leaveTypeId())
+                .leaveTypeName(row.leaveTypeName())
+                .fromDate(row.fromDate())
+                .toDate(row.toDate())
+                .totalDays(row.totalDays())
+                .isHalfDay(row.isHalfDay())
+                .halfDayType(row.halfDayType())
+                .reason(row.reason())
+                .status(row.status())
+                .rejectReason(row.rejectReason())
+                .actionedByName(row.actionedByName())
+                .appliedAt(row.appliedAt())
+                .actionedAt(row.actionedAt())
                 .build();
     }
 }

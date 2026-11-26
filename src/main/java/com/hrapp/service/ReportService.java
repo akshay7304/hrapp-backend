@@ -7,35 +7,26 @@ import com.hrapp.dto.response.LeaveReportResponse;
 import com.hrapp.dto.response.LeaveRequestResponse;
 import com.hrapp.dto.response.PageResponse;
 import com.hrapp.dto.response.SalaryReportResponse;
-import com.hrapp.entity.Advance;
-import com.hrapp.entity.Attendance;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.Holiday;
-import com.hrapp.entity.LeaveRequest;
-import com.hrapp.entity.SalaryAdjustment;
-import com.hrapp.entity.SalaryPayment;
-import com.hrapp.entity.SalaryStructure;
-import com.hrapp.entity.User;
-import com.hrapp.enums.AdvanceStatus;
 import com.hrapp.enums.AttendanceStatus;
-import com.hrapp.enums.LeaveRequestStatus;
 import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.UnauthorizedException;
-import com.hrapp.repository.AdvanceRepository;
-import com.hrapp.repository.AttendanceRepository;
+import com.hrapp.repository.AdjustmentTotalsRow;
+import com.hrapp.repository.AdvanceReportUserRow;
+import com.hrapp.repository.AdvanceRow;
+import com.hrapp.repository.AttendanceReportDayRow;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.HolidayRepository;
-import com.hrapp.repository.LeaveBalanceRepository;
-import com.hrapp.repository.LeaveRequestRepository;
-import com.hrapp.repository.SalaryAdjustmentRepository;
-import com.hrapp.repository.SalaryPaymentRepository;
-import com.hrapp.repository.UserRepository;
+import com.hrapp.repository.LeaveReportLeaveRow;
+import com.hrapp.repository.ReportEmployeeRow;
+import com.hrapp.repository.ReportJdbcRepository;
+import com.hrapp.repository.SalaryReportRow;
+import com.hrapp.security.AccountAccessService;
 import com.hrapp.security.SecurityUtil;
 import com.hrapp.util.WeekOffSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,27 +34,17 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * JSON reporting endpoints for HR/Admin dashboards. Every report is scoped to
- * the caller's company via {@link SecurityUtil}.
- *
- * <p>Performance notes:
- * <ul>
- *   <li>Each report does a single user fetch via {@code findByCompanyId}, which
- *       already {@code JOIN FETCH}es department, designation and status.</li>
- *   <li>Attendance / leave / advance / adjustment lookups are batched by
- *       company and grouped by user id rather than queried per-employee.</li>
- * </ul>
+ * the caller's company via {@link SecurityUtil}. List endpoints page in Postgres
+ * via {@link ReportJdbcRepository}; attendance day math still runs in-memory
+ * for the current page only.
  */
 @Service
 @RequiredArgsConstructor
@@ -71,19 +52,11 @@ import java.util.stream.Collectors;
 public class ReportService {
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
-    private static final String ADJ_TYPE_ADDITION = "ADDITION";
-    private static final String ADJ_TYPE_DEDUCTION = "DEDUCTION";
+    private static final int MAX_PAGE_SIZE = 100;
     private static final List<String> ATTENDANCE_EXCLUDED_STATUSES =
-            List.copyOf(com.hrapp.security.AccountAccessService.WORKFORCE_EXCLUDED_STATUSES);
+            List.copyOf(AccountAccessService.WORKFORCE_EXCLUDED_STATUSES);
 
-    private final UserRepository userRepository;
-    private final AttendanceRepository attendanceRepository;
-    private final SalaryPaymentRepository salaryPaymentRepository;
-    private final SalaryAdjustmentRepository salaryAdjustmentRepository;
-    private final LeaveRequestRepository leaveRequestRepository;
-    @SuppressWarnings("unused") // injected per spec; kept for future per-employee balance breakdowns
-    private final LeaveBalanceRepository leaveBalanceRepository;
-    private final AdvanceRepository advanceRepository;
+    private final ReportJdbcRepository reportJdbcRepository;
     private final HolidayRepository holidayRepository;
     private final CompanySettingsRepository companySettingsRepository;
 
@@ -93,7 +66,9 @@ public class ReportService {
 
     @Transactional(readOnly = true)
     public PageResponse<AttendanceReportResponse> getMonthlyAttendanceReport(
-            Integer month, Integer year, Pageable pageable) {
+            Integer month, Integer year, int page, int size) {
+        validateReportListPage(page, size);
+        requireMonthYear(month, year);
         Long companyId = requireCallerCompanyId();
         CompanySettings settings = companySettingsRepository.findByCompanyId(companyId)
                 .orElseThrow(() -> new BadRequestException("Company settings not configured"));
@@ -102,35 +77,61 @@ public class ReportService {
         LocalDate monthStart = ym.atDay(1);
         LocalDate monthEnd = ym.atEndOfMonth();
         Integer totalWorkingDays = calculateWorkingDays(monthStart, monthEnd, settings, companyId);
+        Set<LocalDate> holidays = holidayRepository
+                .findByCompanyIdAndHolidayDateBetween(companyId, monthStart, monthEnd).stream()
+                .map(Holiday::getHolidayDate)
+                .collect(Collectors.toSet());
 
-        List<User> employees = userRepository
-                .findByCompanyIdAndStatus_NameNotIn(companyId, ATTENDANCE_EXCLUDED_STATUSES);
+        long offset = (long) page * size;
+        List<ReportEmployeeRow> employees = reportJdbcRepository.getAttendanceReportEmployees(
+                companyId, ATTENDANCE_EXCLUDED_STATUSES, size, offset);
+        long total = reportJdbcRepository.getAttendanceReportEmployeesCount(
+                companyId, ATTENDANCE_EXCLUDED_STATUSES);
+        if (employees.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, total);
+        }
 
-        List<AttendanceReportResponse> all = employees.stream()
+        List<Long> userIds = employees.stream().map(ReportEmployeeRow::userId).toList();
+        Map<Long, Map<LocalDate, AttendanceReportDayRow>> attendanceByUser = reportJdbcRepository
+                .getAttendanceDaysByUsersAndDateRange(userIds, monthStart, monthEnd).stream()
+                .collect(Collectors.groupingBy(
+                        AttendanceReportDayRow::userId,
+                        Collectors.toMap(
+                                AttendanceReportDayRow::attendanceDate,
+                                row -> row,
+                                (a, b) -> a)));
+        Map<Long, Map<LocalDate, Boolean>> paidLeaveByUser = buildPaidLeaveMapsByUser(
+                reportJdbcRepository.getApprovedOverlappingLeavesByUsers(userIds, monthStart, monthEnd),
+                monthStart,
+                monthEnd);
+
+        List<AttendanceReportResponse> content = employees.stream()
                 .map(employee -> buildAttendanceReport(
-                        employee, month, year, monthStart, monthEnd, totalWorkingDays))
-                .sorted(byEmpCode(AttendanceReportResponse::getEmpCode))
+                        employee,
+                        month,
+                        year,
+                        monthStart,
+                        monthEnd,
+                        totalWorkingDays,
+                        settings,
+                        holidays,
+                        attendanceByUser.getOrDefault(employee.userId(), Map.of()),
+                        paidLeaveByUser.getOrDefault(employee.userId(), Map.of())))
                 .toList();
-        return sliceInMemory(all, pageable);
+        return PageResponse.of(content, page, size, total);
     }
 
-    private AttendanceReportResponse buildAttendanceReport(User employee, Integer month, Integer year,
-                                                           LocalDate monthStart, LocalDate monthEnd,
-                                                           Integer totalWorkingDays) {
-        Long companyId = employee.getCompany() != null ? employee.getCompany().getId() : null;
-        CompanySettings settings = companyId != null
-                ? companySettingsRepository.findByCompanyId(companyId).orElse(null)
-                : null;
-        Set<LocalDate> holidays = companyId != null
-                ? holidayRepository.findByCompanyIdAndHolidayDateBetween(companyId, monthStart, monthEnd)
-                .stream().map(Holiday::getHolidayDate).collect(Collectors.toSet())
-                : Set.of();
-
-        Map<LocalDate, Attendance> byDate = attendanceRepository
-                .findByUserIdAndAttendanceDateBetween(employee.getId(), monthStart, monthEnd).stream()
-                .collect(Collectors.toMap(Attendance::getAttendanceDate, a -> a, (a, b) -> a));
-        Map<LocalDate, Boolean> paidLeaveMap =
-                buildLeavePaidMap(employee.getId(), monthStart, monthEnd);
+    private AttendanceReportResponse buildAttendanceReport(
+            ReportEmployeeRow employee,
+            Integer month,
+            Integer year,
+            LocalDate monthStart,
+            LocalDate monthEnd,
+            Integer totalWorkingDays,
+            CompanySettings settings,
+            Set<LocalDate> holidays,
+            Map<LocalDate, AttendanceReportDayRow> byDate,
+            Map<LocalDate, Boolean> paidLeaveMap) {
 
         BigDecimal presentDays = BigDecimal.ZERO;
         BigDecimal absentDays = BigDecimal.ZERO;
@@ -144,8 +145,7 @@ public class ReportService {
 
         LocalDate cursor = monthStart;
         while (!cursor.isAfter(monthEnd)) {
-            boolean weekOff = settings != null
-                    && WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay());
+            boolean weekOff = WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay());
             boolean holiday = holidays.contains(cursor);
             if (weekOff) {
                 weekOffDays++;
@@ -158,21 +158,21 @@ public class ReportService {
                 continue;
             }
 
-            Attendance a = byDate.get(cursor);
+            AttendanceReportDayRow a = byDate.get(cursor);
             if (a == null) {
                 absentDays = absentDays.add(BigDecimal.ONE);
                 cursor = cursor.plusDays(1);
                 continue;
             }
 
-            overtimeHours = overtimeHours.add(nullSafe(a.getOvertimeHours()));
-            AttendanceStatus status = a.getStatus();
+            overtimeHours = overtimeHours.add(nullSafe(a.overtimeHours()));
+            AttendanceStatus status = parseAttendanceStatus(a.status());
             if (status == null) {
                 absentDays = absentDays.add(BigDecimal.ONE);
             } else {
                 switch (status) {
                     case PRESENT -> {
-                        if (a.getCheckOut() != null) {
+                        if (a.checkOut() != null) {
                             presentDays = presentDays.add(BigDecimal.ONE);
                         } else {
                             absentDays = absentDays.add(BigDecimal.ONE);
@@ -182,7 +182,7 @@ public class ReportService {
                     case HALF_DAY -> halfDays = halfDays.add(BigDecimal.ONE);
                     case ON_LEAVE -> {
                         onLeaveDays = onLeaveDays.add(BigDecimal.ONE);
-                        if (Boolean.TRUE.equals(paidLeaveMap.get(a.getAttendanceDate()))) {
+                        if (Boolean.TRUE.equals(paidLeaveMap.get(a.attendanceDate()))) {
                             paidLeaveDays = paidLeaveDays.add(BigDecimal.ONE);
                         } else {
                             unpaidLeaveDays = unpaidLeaveDays.add(BigDecimal.ONE);
@@ -195,7 +195,6 @@ public class ReportService {
             cursor = cursor.plusDays(1);
         }
 
-        // Align with payroll earned days: present + half×0.5 + paid leave.
         BigDecimal earnedDays = presentDays
                 .add(halfDays.multiply(new BigDecimal("0.5")))
                 .add(paidLeaveDays);
@@ -205,13 +204,11 @@ public class ReportService {
                 : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
 
         return AttendanceReportResponse.builder()
-                .userId(employee.getId())
-                .fullName(employee.getFullName())
-                .empCode(employee.getEmpCode())
-                .departmentName(employee.getDepartment() != null
-                        ? employee.getDepartment().getName() : null)
-                .designationName(employee.getDesignation() != null
-                        ? employee.getDesignation().getName() : null)
+                .userId(employee.userId())
+                .fullName(employee.fullName())
+                .empCode(employee.empCode())
+                .departmentName(employee.departmentName())
+                .designationName(employee.designationName())
                 .month(month)
                 .year(year)
                 .totalWorkingDays(totalWorkingDays)
@@ -234,70 +231,52 @@ public class ReportService {
 
     @Transactional(readOnly = true)
     public PageResponse<SalaryReportResponse> getMonthlySalaryReport(
-            Integer month, Integer year, Pageable pageable) {
+            Integer month, Integer year, int page, int size) {
+        validateReportListPage(page, size);
+        requireMonthYear(month, year);
         Long companyId = requireCallerCompanyId();
-        List<SalaryPayment> payments = salaryPaymentRepository
-                .findByUser_CompanyIdAndMonthAndYear(companyId, month, year);
-        Map<Long, AdjustmentTotals> adjustmentsByUser = computeAdjustmentTotals(companyId, month, year);
+        long offset = (long) page * size;
+        List<SalaryReportRow> rows = reportJdbcRepository
+                .getSalaryReportByCompanyMonthYear(companyId, month, year, size, offset);
+        long total = reportJdbcRepository.getSalaryReportByCompanyMonthYearCount(companyId, month, year);
+        Map<Long, AdjustmentTotalsRow> adjustmentsByUser = reportJdbcRepository
+                .getAdjustmentTotalsByCompanyMonthYear(companyId, month, year).stream()
+                .collect(Collectors.toMap(AdjustmentTotalsRow::userId, row -> row, (a, b) -> a));
 
-        List<SalaryReportResponse> all = payments.stream()
-                .map(payment -> buildSalaryReport(payment, adjustmentsByUser))
-                .sorted(byEmpCode(SalaryReportResponse::getEmpCode))
+        List<SalaryReportResponse> content = rows.stream()
+                .map(row -> buildSalaryReport(row, adjustmentsByUser))
                 .toList();
-        return sliceInMemory(all, pageable);
+        return PageResponse.of(content, page, size, total);
     }
 
-    private SalaryReportResponse buildSalaryReport(SalaryPayment payment,
-                                                   Map<Long, AdjustmentTotals> adjustmentsByUser) {
-        User user = payment.getUser();
-        SalaryStructure structure = payment.getSalaryStructure();
-        AdjustmentTotals totals = adjustmentsByUser.getOrDefault(
-                user != null ? user.getId() : null, AdjustmentTotals.zero());
-
+    private SalaryReportResponse buildSalaryReport(
+            SalaryReportRow row, Map<Long, AdjustmentTotalsRow> adjustmentsByUser) {
+        AdjustmentTotalsRow totals = adjustmentsByUser.get(row.userId());
+        BigDecimal additions = totals != null ? nullSafe(totals.additions()) : BigDecimal.ZERO;
+        BigDecimal deductions = totals != null ? nullSafe(totals.deductions()) : BigDecimal.ZERO;
         return SalaryReportResponse.builder()
-                .userId(user != null ? user.getId() : null)
-                .fullName(user != null ? user.getFullName() : null)
-                .empCode(user != null ? user.getEmpCode() : null)
-                .departmentName(user != null && user.getDepartment() != null
-                        ? user.getDepartment().getName() : null)
-                .designationName(user != null && user.getDesignation() != null
-                        ? user.getDesignation().getName() : null)
-                .month(payment.getMonth())
-                .year(payment.getYear())
-                .salaryType(user != null && user.getSalaryType() != null
-                        ? user.getSalaryType().name() : null)
-                .basic(structure != null ? structure.getBasic() : null)
-                .hra(structure != null ? structure.getHra() : null)
-                .allowances(structure != null ? structure.getAllowances() : null)
-                .grossSalary(payment.getGrossSalary())
-                .pfDeduction(structure != null ? structure.getPfDeduction() : null)
-                .otherDeductions(structure != null ? structure.getOtherDeductions() : null)
-                .advanceDeduction(payment.getAdvanceDeduction())
-                .totalAdjustmentAdditions(scale2(totals.additions()))
-                .totalAdjustmentDeductions(scale2(totals.deductions()))
-                .totalDeductions(payment.getTotalDeductions())
-                .netSalary(payment.getNetSalary())
-                .status(payment.getStatus() != null ? payment.getStatus().name() : null)
-                .paidOn(payment.getPaidOn())
+                .userId(row.userId())
+                .fullName(row.fullName())
+                .empCode(row.empCode())
+                .departmentName(row.departmentName())
+                .designationName(row.designationName())
+                .month(row.month())
+                .year(row.year())
+                .salaryType(row.salaryType())
+                .basic(row.basic())
+                .hra(row.hra())
+                .allowances(row.allowances())
+                .grossSalary(row.grossSalary())
+                .pfDeduction(row.pfDeduction())
+                .otherDeductions(row.otherDeductions())
+                .advanceDeduction(row.advanceDeduction())
+                .totalAdjustmentAdditions(scale2(additions))
+                .totalAdjustmentDeductions(scale2(deductions))
+                .totalDeductions(row.totalDeductions())
+                .netSalary(row.netSalary())
+                .status(row.status())
+                .paidOn(row.paidOn())
                 .build();
-    }
-
-    private Map<Long, AdjustmentTotals> computeAdjustmentTotals(Long companyId, Integer month, Integer year) {
-        Map<Long, AdjustmentTotals> result = new HashMap<>();
-        for (SalaryAdjustment adj : salaryAdjustmentRepository
-                .findByCompanyIdAndMonthAndYear(companyId, month, year)) {
-            Long userId = adj.getUser() != null ? adj.getUser().getId() : null;
-            if (userId == null) {
-                continue;
-            }
-            AdjustmentTotals totals = result.computeIfAbsent(userId, k -> new AdjustmentTotals());
-            if (ADJ_TYPE_ADDITION.equalsIgnoreCase(adj.getType())) {
-                totals.add(nullSafe(adj.getAmount()), BigDecimal.ZERO);
-            } else if (ADJ_TYPE_DEDUCTION.equalsIgnoreCase(adj.getType())) {
-                totals.add(BigDecimal.ZERO, nullSafe(adj.getAmount()));
-            }
-        }
-        return result;
     }
 
     // ============================================================
@@ -306,56 +285,60 @@ public class ReportService {
 
     @Transactional(readOnly = true)
     public PageResponse<LeaveReportResponse> getLeaveReport(
-            Integer month, Integer year, Pageable pageable) {
+            Integer month, Integer year, int page, int size) {
+        validateReportListPage(page, size);
+        requireMonthYear(month, year);
         Long companyId = requireCallerCompanyId();
         YearMonth ym = YearMonth.of(year, month);
         LocalDate monthStart = ym.atDay(1);
         LocalDate monthEnd = ym.atEndOfMonth();
 
-        List<User> employees = userRepository.findByCompanyId(companyId);
-        Map<Long, List<LeaveRequest>> leavesByUser = leaveRequestRepository
-                .findByUser_CompanyIdAndOverlapping(companyId, monthStart, monthEnd).stream()
-                .collect(Collectors.groupingBy(lr -> lr.getUser().getId()));
+        long offset = (long) page * size;
+        List<ReportEmployeeRow> employees =
+                reportJdbcRepository.getLeaveReportEmployees(companyId, size, offset);
+        long total = reportJdbcRepository.getLeaveReportEmployeesCount(companyId);
+        if (employees.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, total);
+        }
 
-        List<LeaveReportResponse> all = employees.stream()
+        List<Long> userIds = employees.stream().map(ReportEmployeeRow::userId).toList();
+        Map<Long, List<LeaveReportLeaveRow>> leavesByUser = reportJdbcRepository
+                .getOverlappingLeavesByUsers(userIds, monthStart, monthEnd).stream()
+                .collect(Collectors.groupingBy(LeaveReportLeaveRow::userId));
+
+        List<LeaveReportResponse> content = employees.stream()
                 .map(employee -> buildLeaveReport(
-                        employee, month, year,
-                        leavesByUser.getOrDefault(employee.getId(), List.of())))
-                .sorted(byEmpCode(LeaveReportResponse::getEmpCode))
+                        employee, month, year, leavesByUser.getOrDefault(employee.userId(), List.of())))
                 .toList();
-        return sliceInMemory(all, pageable);
+        return PageResponse.of(content, page, size, total);
     }
 
-    private LeaveReportResponse buildLeaveReport(User employee, Integer month, Integer year,
-                                                 List<LeaveRequest> leaves) {
+    private LeaveReportResponse buildLeaveReport(
+            ReportEmployeeRow employee,
+            Integer month,
+            Integer year,
+            List<LeaveReportLeaveRow> leaves) {
         BigDecimal totalLeavesTaken = BigDecimal.ZERO;
         BigDecimal totalPaid = BigDecimal.ZERO;
         BigDecimal totalUnpaid = BigDecimal.ZERO;
-        for (LeaveRequest lr : leaves) {
-            BigDecimal days = nullSafe(lr.getTotalDays());
+        for (LeaveReportLeaveRow lr : leaves) {
+            BigDecimal days = nullSafe(lr.totalDays());
             totalLeavesTaken = totalLeavesTaken.add(days);
-            boolean paid = lr.getLeaveType() != null
-                    && Boolean.TRUE.equals(lr.getLeaveType().getIsPaid());
-            if (paid) {
+            if (Boolean.TRUE.equals(lr.leaveTypeIsPaid())) {
                 totalPaid = totalPaid.add(days);
             } else {
                 totalUnpaid = totalUnpaid.add(days);
             }
         }
 
-        List<LeaveRequestResponse> leaveResponses = leaves.stream()
-                .map(this::toLeaveRequestResponse)
-                .toList();
-
         return LeaveReportResponse.builder()
-                .userId(employee.getId())
-                .fullName(employee.getFullName())
-                .empCode(employee.getEmpCode())
-                .departmentName(employee.getDepartment() != null
-                        ? employee.getDepartment().getName() : null)
+                .userId(employee.userId())
+                .fullName(employee.fullName())
+                .empCode(employee.empCode())
+                .departmentName(employee.departmentName())
                 .month(month)
                 .year(year)
-                .leaveRequests(leaveResponses)
+                .leaveRequests(leaves.stream().map(this::toLeaveRequestResponse).toList())
                 .totalLeavesTaken(scale1(totalLeavesTaken))
                 .totalPaidLeaves(scale1(totalPaid))
                 .totalUnpaidLeaves(scale1(totalUnpaid))
@@ -367,80 +350,46 @@ public class ReportService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public PageResponse<AdvanceReportResponse> getAdvanceReport(Pageable pageable) {
+    public PageResponse<AdvanceReportResponse> getAdvanceReport(int page, int size) {
+        validateReportListPage(page, size);
         Long companyId = requireCallerCompanyId();
-        Map<Long, List<Advance>> advancesByUser = advanceRepository
-                .findByUser_CompanyIdOrderByCreatedAtDesc(companyId).stream()
-                .collect(Collectors.groupingBy(a -> a.getUser().getId()));
-        if (advancesByUser.isEmpty()) {
-            return sliceInMemory(List.of(), pageable);
+        long offset = (long) page * size;
+        List<AdvanceReportUserRow> users =
+                reportJdbcRepository.getAdvanceReportUsers(companyId, size, offset);
+        long total = reportJdbcRepository.getAdvanceReportUsersCount(companyId);
+        if (users.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, total);
         }
 
-        Map<Long, User> usersById = userRepository.findByCompanyId(companyId).stream()
-                .collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+        List<Long> userIds = users.stream().map(AdvanceReportUserRow::userId).toList();
+        Map<Long, List<AdvanceRow>> advancesByUser = reportJdbcRepository.getAdvancesByUserIds(userIds)
+                .stream()
+                .collect(Collectors.groupingBy(AdvanceRow::userId));
 
-        List<AdvanceReportResponse> all = advancesByUser.entrySet().stream()
-                .map(entry -> {
-                    User employee = usersById.get(entry.getKey());
-                    if (employee == null) {
-                        // Defensive: advance row references a user from a different company.
-                        // Shouldn't happen if data integrity is intact; log and skip.
-                        log.warn("Skipping advance report group — user id={} not found in company={}",
-                                entry.getKey(), companyId);
-                        return null;
-                    }
-                    return buildAdvanceReport(employee, entry.getValue());
-                })
-                .filter(Objects::nonNull)
-                .sorted(byEmpCode(AdvanceReportResponse::getEmpCode))
+        List<AdvanceReportResponse> content = users.stream()
+                .map(user -> AdvanceReportResponse.builder()
+                        .userId(user.userId())
+                        .fullName(user.fullName())
+                        .empCode(user.empCode())
+                        .departmentName(user.departmentName())
+                        .totalAdvanceRequested(scale2(nullSafe(user.totalAdvanceRequested())))
+                        .totalAdvanceApproved(scale2(nullSafe(user.totalAdvanceApproved())))
+                        .totalAdvanceRecovered(scale2(nullSafe(user.totalAdvanceRecovered())))
+                        .totalAdvancePending(scale2(nullSafe(user.totalAdvancePending())))
+                        .advances(advancesByUser.getOrDefault(user.userId(), List.of()).stream()
+                                .map(this::toAdvanceResponse)
+                                .toList())
+                        .build())
                 .toList();
-        return sliceInMemory(all, pageable);
-    }
-
-    private AdvanceReportResponse buildAdvanceReport(User employee, List<Advance> advances) {
-        BigDecimal totalRequested = BigDecimal.ZERO;
-        BigDecimal totalApproved = BigDecimal.ZERO;
-        BigDecimal totalRecovered = BigDecimal.ZERO;
-        BigDecimal totalPending = BigDecimal.ZERO;
-        for (Advance a : advances) {
-            BigDecimal amount = nullSafe(a.getAmount());
-            totalRequested = totalRequested.add(amount);
-            if (a.getStatus() == AdvanceStatus.APPROVED) {
-                totalApproved = totalApproved.add(amount);
-            }
-            if (Boolean.TRUE.equals(a.getIsRecovered())) {
-                totalRecovered = totalRecovered.add(amount);
-            }
-            if (a.getStatus() == AdvanceStatus.PENDING) {
-                totalPending = totalPending.add(amount);
-            }
-        }
-        return AdvanceReportResponse.builder()
-                .userId(employee.getId())
-                .fullName(employee.getFullName())
-                .empCode(employee.getEmpCode())
-                .departmentName(employee.getDepartment() != null
-                        ? employee.getDepartment().getName() : null)
-                .totalAdvanceRequested(scale2(totalRequested))
-                .totalAdvanceApproved(scale2(totalApproved))
-                .totalAdvanceRecovered(scale2(totalRecovered))
-                .totalAdvancePending(scale2(totalPending))
-                .advances(advances.stream().map(this::toAdvanceResponse).toList())
-                .build();
+        return PageResponse.of(content, page, size, total);
     }
 
     // ============================================================
     //  Helpers
     // ============================================================
 
-    /**
-     * Counts working days in a date range — excludes the company's weekly off
-     * day (parsed from {@code settings.weekOffDay}) and any holidays in the
-     * range. Mirrors {@link PayrollService#calculateWorkingDays} so attendance
-     * reports stay in lock-step with payroll math.
-     */
-    private Integer calculateWorkingDays(LocalDate from, LocalDate to,
-                                         CompanySettings settings, Long companyId) {
+    private Integer calculateWorkingDays(
+            LocalDate from, LocalDate to, CompanySettings settings, Long companyId) {
         Set<LocalDate> holidays = holidayRepository
                 .findByCompanyIdAndHolidayDateBetween(companyId, from, to).stream()
                 .map(Holiday::getHolidayDate)
@@ -449,7 +398,7 @@ public class ReportService {
         int working = 0;
         LocalDate cursor = from;
         while (!cursor.isAfter(to)) {
-            boolean skip = com.hrapp.util.WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay())
+            boolean skip = WeekOffSupport.isWeekOff(cursor, settings.getWeekOffDay())
                     || holidays.contains(cursor);
             if (!skip) {
                 working++;
@@ -459,17 +408,17 @@ public class ReportService {
         return working;
     }
 
-    private Map<LocalDate, Boolean> buildLeavePaidMap(Long userId, LocalDate monthStart, LocalDate monthEnd) {
-        List<LeaveRequest> approvedLeaves = leaveRequestRepository
-                .findOverlappingApprovedLeaves(userId, LeaveRequestStatus.APPROVED, monthStart, monthEnd);
-        Map<LocalDate, Boolean> result = new HashMap<>();
-        for (LeaveRequest lr : approvedLeaves) {
-            boolean paid = lr.getLeaveType() != null
-                    && Boolean.TRUE.equals(lr.getLeaveType().getIsPaid());
-            LocalDate cursor = lr.getFromDate().isBefore(monthStart) ? monthStart : lr.getFromDate();
-            LocalDate end = lr.getToDate().isAfter(monthEnd) ? monthEnd : lr.getToDate();
+    private static Map<Long, Map<LocalDate, Boolean>> buildPaidLeaveMapsByUser(
+            List<LeaveReportLeaveRow> approvedLeaves, LocalDate monthStart, LocalDate monthEnd) {
+        Map<Long, Map<LocalDate, Boolean>> result = new HashMap<>();
+        for (LeaveReportLeaveRow lr : approvedLeaves) {
+            boolean paid = Boolean.TRUE.equals(lr.leaveTypeIsPaid());
+            LocalDate cursor = lr.fromDate().isBefore(monthStart) ? monthStart : lr.fromDate();
+            LocalDate end = lr.toDate().isAfter(monthEnd) ? monthEnd : lr.toDate();
+            Map<LocalDate, Boolean> byDate =
+                    result.computeIfAbsent(lr.userId(), ignored -> new HashMap<>());
             while (!cursor.isAfter(end)) {
-                result.merge(cursor, paid, (existing, fresh) -> existing || fresh);
+                byDate.merge(cursor, paid, (existing, fresh) -> existing || fresh);
                 cursor = cursor.plusDays(1);
             }
         }
@@ -484,8 +433,33 @@ public class ReportService {
         return companyId;
     }
 
-    private static <T> Comparator<T> byEmpCode(Function<T, String> extractor) {
-        return Comparator.comparing(extractor, Comparator.nullsLast(Comparator.naturalOrder()));
+    private static void requireMonthYear(Integer month, Integer year) {
+        if (month == null || year == null) {
+            throw new BadRequestException("month and year are required");
+        }
+        if (month < 1 || month > 12) {
+            throw new BadRequestException("Month must be between 1 and 12");
+        }
+    }
+
+    private static void validateReportListPage(int page, int size) {
+        if (page < 0) {
+            throw new BadRequestException("Page index must not be less than zero");
+        }
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Size must be between 1 and " + MAX_PAGE_SIZE);
+        }
+    }
+
+    private static AttendanceStatus parseAttendanceStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        try {
+            return AttendanceStatus.valueOf(status);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     private static BigDecimal nullSafe(BigDecimal value) {
@@ -500,94 +474,43 @@ public class ReportService {
         return value.setScale(2, RoundingMode.HALF_UP);
     }
 
-    /**
-     * Pagination for fully-materialised report rows. Reports aggregate across
-     * employees so the full list must be built before slicing; given typical
-     * HR team sizes this stays cheap. If a tenant ever grows large enough to
-     * notice, the underlying query layer is where pagination should move.
-     */
-    private static <T> PageResponse<T> sliceInMemory(List<T> all, Pageable pageable) {
-        int total = all.size();
-        int pageSize = Math.max(pageable.getPageSize(), 1);
-        int from = (int) Math.min(pageable.getOffset(), total);
-        int to = Math.min(from + pageSize, total);
-        List<T> content = from >= to ? List.of() : all.subList(from, to);
-        return PageResponse.from(new PageImpl<>(content, pageable, total));
-    }
-
-    // ============================================================
-    //  Embedded mappers (duplicated from LeaveService / AdvanceService to
-    //  keep the reports layer decoupled from those service classes)
-    // ============================================================
-
-    private LeaveRequestResponse toLeaveRequestResponse(LeaveRequest lr) {
-        User user = lr.getUser();
-        User actioner = lr.getActionedBy();
+    private LeaveRequestResponse toLeaveRequestResponse(LeaveReportLeaveRow lr) {
         return LeaveRequestResponse.builder()
-                .id(lr.getId())
-                .userId(user != null ? user.getId() : null)
-                .fullName(user != null ? user.getFullName() : null)
-                .empCode(user != null ? user.getEmpCode() : null)
-                .leaveTypeId(lr.getLeaveType() != null ? lr.getLeaveType().getId() : null)
-                .leaveTypeName(lr.getLeaveType() != null ? lr.getLeaveType().getName() : null)
-                .fromDate(lr.getFromDate())
-                .toDate(lr.getToDate())
-                .totalDays(lr.getTotalDays())
-                .isHalfDay(lr.getIsHalfDay())
-                .halfDayType(lr.getHalfDayType())
-                .reason(lr.getReason())
-                .status(lr.getStatus() != null ? lr.getStatus().name() : null)
-                .rejectReason(lr.getRejectReason())
-                .actionedByName(actioner != null ? actioner.getFullName() : null)
-                .appliedAt(lr.getAppliedAt())
-                .actionedAt(lr.getActionedAt())
+                .id(lr.id())
+                .userId(lr.userId())
+                .fullName(lr.fullName())
+                .empCode(lr.empCode())
+                .leaveTypeId(lr.leaveTypeId())
+                .leaveTypeName(lr.leaveTypeName())
+                .fromDate(lr.fromDate())
+                .toDate(lr.toDate())
+                .totalDays(lr.totalDays())
+                .isHalfDay(lr.isHalfDay())
+                .halfDayType(lr.halfDayType())
+                .reason(lr.reason())
+                .status(lr.status())
+                .rejectReason(lr.rejectReason())
+                .actionedByName(lr.actionedByName())
+                .appliedAt(lr.appliedAt())
+                .actionedAt(lr.actionedAt())
                 .build();
     }
 
-    private AdvanceResponse toAdvanceResponse(Advance advance) {
-        User user = advance.getUser();
-        User approver = advance.getApprovedBy();
+    private AdvanceResponse toAdvanceResponse(AdvanceRow advance) {
         return AdvanceResponse.builder()
-                .id(advance.getId())
-                .userId(user != null ? user.getId() : null)
-                .fullName(user != null ? user.getFullName() : null)
-                .empCode(user != null ? user.getEmpCode() : null)
-                .amount(advance.getAmount())
-                .reason(advance.getReason())
-                .status(advance.getStatus() != null ? advance.getStatus().name() : null)
-                .deductFromMonth(advance.getDeductFromMonth())
-                .deductFromYear(advance.getDeductFromYear())
-                .isRecovered(advance.getIsRecovered())
-                .approvedByName(approver != null ? approver.getFullName() : null)
-                .createdAt(advance.getCreatedAt())
-                .actionedAt(advance.getActionedAt())
+                .id(advance.id())
+                .userId(advance.userId())
+                .fullName(advance.fullName())
+                .empCode(advance.empCode())
+                .amount(advance.amount())
+                .reason(advance.reason())
+                .status(advance.status())
+                .deductFromMonth(advance.deductFromMonth())
+                .deductFromYear(advance.deductFromYear())
+                .isRecovered(advance.isRecovered())
+                .approvedByName(advance.approvedByName())
+                .createdAt(advance.createdAt())
+                .actionedAt(advance.actionedAt())
                 .build();
-    }
-
-    // ============================================================
-    //  Local helper struct
-    // ============================================================
-
-    /** Mutable running totals used while grouping {@link SalaryAdjustment} by user. */
-    private static final class AdjustmentTotals {
-        private BigDecimal additions = BigDecimal.ZERO;
-        private BigDecimal deductions = BigDecimal.ZERO;
-
-        void add(BigDecimal addition, BigDecimal deduction) {
-            additions = additions.add(addition);
-            deductions = deductions.add(deduction);
-        }
-
-        BigDecimal additions() {
-            return additions;
-        }
-
-        BigDecimal deductions() {
-            return deductions;
-        }
-
-        static AdjustmentTotals zero() {
-            return new AdjustmentTotals();
-        }
     }
 }

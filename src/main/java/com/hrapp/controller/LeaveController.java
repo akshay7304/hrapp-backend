@@ -11,8 +11,6 @@ import com.hrapp.service.LeaveService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -99,8 +97,7 @@ public class LeaveController {
             @RequestParam Integer year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, pageable);
+        PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave requests fetched successfully"));
     }
 
@@ -112,8 +109,7 @@ public class LeaveController {
             @RequestParam Integer year,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, pageable);
+        PageResponse<LeaveRequestResponse> data = leaveService.getMyLeaveRequests(month, year, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave history fetched successfully"));
     }
 
@@ -122,8 +118,7 @@ public class LeaveController {
     public ResponseEntity<ApiResponse<PageResponse<LeaveRequestResponse>>> getPendingLeaveRequests(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<LeaveRequestResponse> data = leaveService.getPendingLeaveRequests(pageable);
+        PageResponse<LeaveRequestResponse> data = leaveService.getPendingLeaveRequests(page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Pending leave requests fetched successfully"));
     }
 
@@ -136,9 +131,8 @@ public class LeaveController {
             @RequestParam(required = false) Long employeeId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
         PageResponse<LeaveRequestResponse> data =
-                leaveService.getCompanyLeaveRequests(month, year, status, employeeId, pageable);
+                leaveService.getCompanyLeaveRequests(month, year, status, employeeId, page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Leave requests fetched successfully"));
     }
 

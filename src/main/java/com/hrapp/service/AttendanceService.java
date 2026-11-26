@@ -21,8 +21,11 @@ import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
+import com.hrapp.repository.AttendanceJdbcRepository;
 import com.hrapp.repository.AttendancePunchRepository;
+import com.hrapp.repository.AttendancePunchRow;
 import com.hrapp.repository.AttendanceRepository;
+import com.hrapp.repository.AttendanceRow;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.HolidayRepository;
 import com.hrapp.repository.UserRepository;
@@ -30,20 +33,20 @@ import com.hrapp.security.SecurityUtil;
 import com.hrapp.util.AttendanceDuration;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import org.springframework.data.domain.Page;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.YearMonth;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -57,8 +60,11 @@ import java.util.stream.Collectors;
 @Slf4j
 public class AttendanceService {
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final AttendanceRepository attendanceRepository;
     private final AttendancePunchRepository attendancePunchRepository;
+    private final AttendanceJdbcRepository attendanceJdbcRepository;
     private final UserRepository userRepository;
     private final CompanySettingsRepository companySettingsRepository;
     private final HolidayRepository holidayRepository;
@@ -264,38 +270,75 @@ public class AttendanceService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<AttendanceResponse> getMyAttendanceHistory(int month, int year, Pageable pageable) {
+    public PageResponse<AttendanceResponse> getMyAttendanceHistory(int month, int year, int page, int size) {
+        validateAttendanceListPage(page, size);
+        validateAttendanceMonthYear(month, year);
         Long userId = requireCallerUserId();
         YearMonth ym = YearMonth.of(year, month);
-        // Sort + LIMIT/OFFSET applied in Postgres via Pageable — not in memory.
-        Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
-        Page<Attendance> page = attendanceRepository.findByUserIdAndAttendanceDateBetween(
-                userId, ym.atDay(1), ym.atEndOfMonth(), effective);
-        return toPageResponse(page, toResponsesFromStoredLate(page.getContent()));
+        LocalDate from = ym.atDay(1);
+        LocalDate to = ym.atEndOfMonth();
+        long offset = (long) page * size;
+        List<AttendanceRow> rows = attendanceJdbcRepository
+                .getAttendanceHistoryByUser(userId, from, to, size, offset);
+        long total = attendanceJdbcRepository.getAttendanceHistoryByUserCount(userId, from, to);
+        return PageResponse.of(toAttendanceResponsesFromRows(rows), page, size, total);
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<AttendanceResponse> getCompanyAttendanceToday(Pageable pageable) {
+    public PageResponse<AttendanceResponse> getCompanyAttendanceToday(int page, int size) {
+        validateAttendanceListPage(page, size);
         Long companyId = requireCallerCompanyId();
-        Pageable effective = applyDefaultSort(pageable, Sort.by("user.fullName"));
-        Page<Attendance> page = attendanceRepository.findByCompanyIdAndAttendanceDate(
-                companyId, AppTime.today(), effective);
-        return toPageResponse(page, toResponsesFromStoredLate(page.getContent()));
+        LocalDate today = AppTime.today();
+        long offset = (long) page * size;
+        List<AttendanceRow> rows = attendanceJdbcRepository
+                .getCompanyAttendanceByDate(companyId, today, size, offset);
+        long total = attendanceJdbcRepository.getCompanyAttendanceByDateCount(companyId, today);
+        return PageResponse.of(toAttendanceResponsesFromRows(rows), page, size, total);
     }
 
     @Transactional(readOnly = true)
     public PageResponse<AttendanceResponse> getEmployeeAttendanceHistory(
-            Long employeeId, int month, int year, Pageable pageable) {
+            Long employeeId, int month, int year, int page, int size) {
+        validateAttendanceListPage(page, size);
+        validateAttendanceMonthYear(month, year);
         Long companyId = requireCallerCompanyId();
         User employee = userRepository.findById(employeeId)
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
-        ensureSameCompany(employee, companyId);
+        ensureEmployeeBelongsToCallerCompany(employee, companyId);
 
         YearMonth ym = YearMonth.of(year, month);
-        Pageable effective = applyDefaultSort(pageable, Sort.by("attendanceDate"));
-        Page<Attendance> page = attendanceRepository.findByUserIdAndAttendanceDateBetween(
-                employeeId, ym.atDay(1), ym.atEndOfMonth(), effective);
-        return toPageResponse(page, toResponsesFromStoredLate(page.getContent()));
+        LocalDate from = ym.atDay(1);
+        LocalDate to = ym.atEndOfMonth();
+        long offset = (long) page * size;
+        List<AttendanceRow> rows = attendanceJdbcRepository
+                .getAttendanceHistoryByUser(employeeId, from, to, size, offset);
+        long total = attendanceJdbcRepository.getAttendanceHistoryByUserCount(employeeId, from, to);
+        return PageResponse.of(toAttendanceResponsesFromRows(rows), page, size, total);
+    }
+
+    /**
+     * Resolves the company for an auto-checkout run from the caller role
+     * and optional {@code companyId} query param.
+     */
+    @Transactional
+    public int autoCheckoutMissedForCaller(Long requestedCompanyId) {
+        Long callerCompanyId = SecurityUtil.getCurrentUserCompanyId();
+        Long effectiveCompanyId;
+        if (SecurityUtil.hasRole("SUPERADMIN")) {
+            effectiveCompanyId = requestedCompanyId != null ? requestedCompanyId : callerCompanyId;
+            if (effectiveCompanyId == null) {
+                throw new BadRequestException("companyId is required for SUPERADMIN auto checkout");
+            }
+        } else {
+            if (callerCompanyId == null) {
+                throw new UnauthorizedException("Caller is not bound to a company");
+            }
+            if (requestedCompanyId != null && !requestedCompanyId.equals(callerCompanyId)) {
+                throw new UnauthorizedException("Cannot run auto checkout for another company");
+            }
+            effectiveCompanyId = callerCompanyId;
+        }
+        return autoCheckoutMissed(effectiveCompanyId);
     }
 
     @Transactional
@@ -305,7 +348,7 @@ public class AttendanceService {
 
         User employee = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new ResourceNotFoundException("Employee not found"));
-        ensureSameCompany(employee, companyId);
+        ensureEmployeeBelongsToCallerCompany(employee, companyId);
 
         User marker = userRepository.findById(markerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Marker user not found"));
@@ -394,7 +437,7 @@ public class AttendanceService {
         Attendance attendance = attendanceRepository.findById(attendanceId)
                 .orElseThrow(() -> new ResourceNotFoundException("Attendance not found"));
         User user = attendance.getUser();
-        ensureSameCompany(user, companyId);
+        ensureEmployeeBelongsToCallerCompany(user, companyId);
 
         BigDecimal hours = request.getOvertimeHours() != null
                 ? request.getOvertimeHours()
@@ -429,19 +472,30 @@ public class AttendanceService {
         return companyId;
     }
 
-    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
-        if (pageable.getSort().isSorted()) {
-            return pageable;
-        }
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
-    }
-
-    private void ensureSameCompany(User employee, Long callerCompanyId) {
+    private void ensureEmployeeBelongsToCallerCompany(User employee, Long callerCompanyId) {
         Long employeeCompanyId = employee.getCompany() != null ? employee.getCompany().getId() : null;
         if (!callerCompanyId.equals(employeeCompanyId)) {
             log.warn("Cross-company attendance access blocked — caller={} target={}",
                     callerCompanyId, employeeCompanyId);
             throw new UnauthorizedException("Employee does not belong to your company");
+        }
+    }
+
+    private static void validateAttendanceListPage(int page, int size) {
+        if (page < 0) {
+            throw new BadRequestException("Page must be zero or greater");
+        }
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Size must be between 1 and " + MAX_PAGE_SIZE);
+        }
+    }
+
+    private static void validateAttendanceMonthYear(int month, int year) {
+        if (month < 1 || month > 12) {
+            throw new BadRequestException("Month must be between 1 and 12");
+        }
+        if (year < 2000 || year > 2100) {
+            throw new BadRequestException("Year is out of range");
         }
     }
 
@@ -568,48 +622,110 @@ public class AttendanceService {
     }
 
     /**
-     * List/history mapping: punches batched once; {@code isLate} from stored column
-     * (no shift resolve on the read path).
+     * List/history mapping from JDBC rows: punches batched once;
+     * {@code isLate} from the stored column (no shift resolve on the read path).
      */
-    private List<AttendanceResponse> toResponsesFromStoredLate(List<Attendance> rows) {
+    private List<AttendanceResponse> toAttendanceResponsesFromRows(List<AttendanceRow> rows) {
         if (rows == null || rows.isEmpty()) {
             return List.of();
         }
-        Map<Long, List<AttendancePunch>> punchesByAttendance = loadPunchesGrouped(rows);
+        List<Long> attendanceIds = rows.stream().map(AttendanceRow::id).filter(Objects::nonNull).toList();
+        Map<Long, List<AttendancePunchRow>> punchesByAttendance =
+                attendanceJdbcRepository.getAttendancePunchesByAttendanceIds(attendanceIds).stream()
+                        .collect(Collectors.groupingBy(AttendancePunchRow::attendanceId));
+
         List<AttendanceResponse> out = new ArrayList<>(rows.size());
-        for (Attendance attendance : rows) {
-            List<AttendancePunch> punches = punchesByAttendance.getOrDefault(
-                    attendance.getId(), List.of());
-            out.add(toResponse(attendance, punches, true));
+        for (AttendanceRow row : rows) {
+            List<AttendancePunchRow> punchRows =
+                    punchesByAttendance.getOrDefault(row.id(), List.of());
+            out.add(toAttendanceResponseFromRow(row, punchRows));
         }
         return out;
     }
 
-    private Map<Long, List<AttendancePunch>> loadPunchesGrouped(List<Attendance> rows) {
-        List<Long> ids = rows.stream()
-                .map(Attendance::getId)
-                .filter(Objects::nonNull)
+    private AttendanceResponse toAttendanceResponseFromRow(
+            AttendanceRow row, List<AttendancePunchRow> punchRows) {
+        List<PunchResponse> punchResponses = punchRows.stream()
+                .map(this::toPunchResponseFromRow)
                 .toList();
-        if (ids.isEmpty()) {
-            return Map.of();
-        }
-        return attendancePunchRepository.findByAttendanceIdInOrderByPunchTimeAsc(ids).stream()
-                .collect(Collectors.groupingBy(p -> p.getAttendance().getId()));
+
+        boolean fromPunches = !punchRows.isEmpty();
+        long workedSeconds = fromPunches
+                ? sumPairedSecondsFromRows(punchRows)
+                : safeSeconds(row.workedSeconds());
+        long overtimeSeconds = safeSeconds(row.overtimeSeconds());
+
+        return AttendanceResponse.builder()
+                .id(row.id())
+                .userId(row.userId())
+                .fullName(row.fullName())
+                .empCode(row.empCode())
+                .attendanceDate(row.attendanceDate())
+                .checkIn(row.checkIn())
+                .checkOut(row.checkOut())
+                .workedHours(AttendanceDuration.format(workedSeconds))
+                .overtimeHours(AttendanceDuration.format(overtimeSeconds))
+                .status(row.status())
+                .source(row.source())
+                .isManual(row.isManual())
+                .isAutoCheckout(row.isAutoCheckout())
+                .isLate(row.isLate())
+                .manualReason(row.manualReason())
+                .punches(punchResponses)
+                .totalSessions(countCompleteSessionsFromRows(punchRows))
+                .isCheckedIn(isCheckedInFromRows(punchRows, row))
+                .build();
     }
 
-    private PageResponse<AttendanceResponse> toPageResponse(
-            Page<Attendance> page, List<AttendanceResponse> content) {
-        return PageResponse.<AttendanceResponse>builder()
-                .content(content)
-                .pageNumber(page.getNumber())
-                .pageSize(page.getSize())
-                .totalElements(page.getTotalElements())
-                .totalPages(page.getTotalPages())
-                .isFirst(page.isFirst())
-                .isLast(page.isLast())
-                .hasNext(page.hasNext())
-                .hasPrevious(page.hasPrevious())
+    private PunchResponse toPunchResponseFromRow(AttendancePunchRow punch) {
+        return PunchResponse.builder()
+                .id(punch.id())
+                .punchTime(punch.punchTime())
+                .punchType(punch.punchType())
+                .source(punch.source())
                 .build();
+    }
+
+    private static long sumPairedSecondsFromRows(List<AttendancePunchRow> punches) {
+        List<AttendancePunchRow> sorted = punches.stream()
+                .sorted(Comparator.comparing(AttendancePunchRow::punchTime))
+                .toList();
+        long total = 0L;
+        LocalDateTime openIn = null;
+        for (AttendancePunchRow punch : sorted) {
+            if ("IN".equals(punch.punchType())) {
+                openIn = punch.punchTime();
+            } else if ("OUT".equals(punch.punchType()) && openIn != null) {
+                total += AttendanceDuration.between(openIn, punch.punchTime());
+                openIn = null;
+            }
+        }
+        return total;
+    }
+
+    private static int countCompleteSessionsFromRows(List<AttendancePunchRow> punches) {
+        List<AttendancePunchRow> sorted = punches.stream()
+                .sorted(Comparator.comparing(AttendancePunchRow::punchTime))
+                .toList();
+        int sessions = 0;
+        LocalDateTime openIn = null;
+        for (AttendancePunchRow punch : sorted) {
+            if ("IN".equals(punch.punchType())) {
+                openIn = punch.punchTime();
+            } else if ("OUT".equals(punch.punchType()) && openIn != null) {
+                sessions++;
+                openIn = null;
+            }
+        }
+        return sessions;
+    }
+
+    private static boolean isCheckedInFromRows(List<AttendancePunchRow> punches, AttendanceRow row) {
+        if (punches.isEmpty()) {
+            return row.checkIn() != null && row.checkOut() == null;
+        }
+        AttendancePunchRow last = punches.get(punches.size() - 1);
+        return "IN".equals(last.punchType());
     }
 
     private AttendanceResponse toResponse(

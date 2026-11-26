@@ -1,8 +1,6 @@
 package com.hrapp.repository;
 
 import com.hrapp.entity.Attendance;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -29,17 +27,6 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
             @Param("companyId") Long companyId,
             @Param("date") LocalDate date);
 
-    /**
-     * Paginated variant of {@link #findByCompanyIdAndAttendanceDate(Long, LocalDate)}.
-     * Uses {@link EntityGraph} so the {@code user} association is loaded
-     * with the row (avoids N+1) while still allowing safe SQL pagination —
-     * {@code JOIN FETCH} on a {@code Pageable} query would force in-memory
-     * pagination (HHH000104).
-     */
-    @EntityGraph(attributePaths = {"user", "user.company"})
-    Page<Attendance> findByCompanyIdAndAttendanceDate(
-            Long companyId, LocalDate attendanceDate, Pageable pageable);
-
     @EntityGraph(attributePaths = {"user", "user.company"})
     List<Attendance> findByUserIdAndAttendanceDateBetweenOrderByAttendanceDateAsc(
             Long userId, LocalDate from, LocalDate to);
@@ -50,11 +37,6 @@ public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
      */
     List<Attendance> findByUserIdAndAttendanceDateBetween(
             Long userId, LocalDate from, LocalDate to);
-
-    /** Paginated history lookup; ordering is whatever {@code Pageable.sort} requests. */
-    @EntityGraph(attributePaths = {"user", "user.company"})
-    Page<Attendance> findByUserIdAndAttendanceDateBetween(
-            Long userId, LocalDate from, LocalDate to, Pageable pageable);
 
     @Query("SELECT a FROM Attendance a JOIN FETCH a.user " +
             "WHERE a.company.id = :companyId AND a.attendanceDate BETWEEN :from AND :to " +

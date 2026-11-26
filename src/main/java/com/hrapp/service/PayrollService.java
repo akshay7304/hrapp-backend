@@ -33,8 +33,11 @@ import com.hrapp.repository.AttendanceRepository;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.HolidayRepository;
 import com.hrapp.repository.LeaveRequestRepository;
+import com.hrapp.repository.PayrollJdbcRepository;
 import com.hrapp.repository.SalaryAdjustmentRepository;
+import com.hrapp.repository.SalaryAdjustmentRow;
 import com.hrapp.repository.SalaryPaymentRepository;
+import com.hrapp.repository.SalaryPaymentRow;
 import com.hrapp.repository.SalaryStructureRepository;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
@@ -42,10 +45,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -72,6 +71,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class PayrollService {
 
+    private static final int MAX_PAGE_SIZE = 100;
     private static final String ADJ_TYPE_ADDITION = "ADDITION";
     private static final String ADJ_TYPE_DEDUCTION = "DEDUCTION";
     /**
@@ -87,6 +87,7 @@ public class PayrollService {
     private final SalaryStructureRepository salaryStructureRepository;
     private final SalaryPaymentRepository salaryPaymentRepository;
     private final SalaryAdjustmentRepository salaryAdjustmentRepository;
+    private final PayrollJdbcRepository payrollJdbcRepository;
     private final AttendanceRepository attendanceRepository;
     private final AdvanceRepository advanceRepository;
     private final CompanySettingsRepository companySettingsRepository;
@@ -349,25 +350,31 @@ public class PayrollService {
 
     /**
      * Paginated payroll listing. Backs {@code GET /payroll/{month}/{year}}.
-     * The adjustments map is built company-wide for the month, then looked up
-     * per user on the current page — keeps the response shape identical to
-     * the legacy list endpoint while still serving one page at a time.
+     * Adjustments for the company month are loaded once, then attached per
+     * user on the current page.
      */
     @Transactional(readOnly = true)
     public PageResponse<SalaryPaymentResponse> getPayroll(
-            Integer month, Integer year, Pageable pageable) {
-        Long companyId = requireCallerCompanyId();
-        Pageable effective = applyDefaultSort(pageable, Sort.by("user.fullName"));
-        Page<SalaryPayment> payments = salaryPaymentRepository
-                .findByUser_CompanyIdAndMonthAndYear(companyId, month, year, effective);
-        if (payments.isEmpty()) {
-            return PageResponse.from(payments.map(p -> toPaymentResponse(p, List.of())));
+            Integer month, Integer year, int page, int size) {
+        validatePayrollListPage(page, size);
+        if (month == null || year == null) {
+            throw new BadRequestException("month and year are required");
         }
+        if (month < 1 || month > 12) {
+            throw new BadRequestException("Month must be between 1 and 12");
+        }
+        Long companyId = requireCallerCompanyId();
+        long offset = (long) page * size;
+        List<SalaryPaymentRow> rows = payrollJdbcRepository
+                .getPayrollByCompanyMonthYear(companyId, month, year, size, offset);
+        long total = payrollJdbcRepository.getPayrollByCompanyMonthYearCount(companyId, month, year);
         Map<Long, List<SalaryAdjustmentResponse>> adjustmentsByUser =
-                loadAdjustmentsByUser(companyId, month, year);
-        return PageResponse.from(payments.map(p ->
-                toPaymentResponse(p,
-                        adjustmentsByUser.getOrDefault(p.getUser().getId(), List.of()))));
+                loadAdjustmentsByUserFromJdbc(companyId, month, year);
+        List<SalaryPaymentResponse> content = rows.stream()
+                .map(row -> toPaymentResponseFromRow(
+                        row, adjustmentsByUser.getOrDefault(row.userId(), List.of())))
+                .toList();
+        return PageResponse.of(content, page, size, total);
     }
 
     private Map<Long, List<SalaryAdjustmentResponse>> loadAdjustmentsByUser(
@@ -379,11 +386,21 @@ public class PayrollService {
                         Collectors.mapping(this::toAdjustmentResponse, Collectors.toList())));
     }
 
-    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
-        if (pageable.getSort().isSorted()) {
-            return pageable;
+    private Map<Long, List<SalaryAdjustmentResponse>> loadAdjustmentsByUserFromJdbc(
+            Long companyId, Integer month, Integer year) {
+        return payrollJdbcRepository.getAdjustmentsByCompanyMonthYear(companyId, month, year).stream()
+                .collect(Collectors.groupingBy(
+                        SalaryAdjustmentRow::userId,
+                        Collectors.mapping(this::toAdjustmentResponseFromRow, Collectors.toList())));
+    }
+
+    private static void validatePayrollListPage(int page, int size) {
+        if (page < 0) {
+            throw new BadRequestException("Page must be zero or greater");
         }
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Size must be between 1 and " + MAX_PAGE_SIZE);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -760,6 +777,70 @@ public class PayrollService {
                 .reason(adjustment.getReason())
                 .createdByName(creator != null ? creator.getFullName() : null)
                 .createdAt(adjustment.getCreatedAt())
+                .build();
+    }
+
+    private SalaryAdjustmentResponse toAdjustmentResponseFromRow(SalaryAdjustmentRow row) {
+        return SalaryAdjustmentResponse.builder()
+                .id(row.id())
+                .userId(row.userId())
+                .fullName(row.fullName())
+                .month(row.month())
+                .year(row.year())
+                .type(row.type())
+                .amount(row.amount())
+                .reason(row.reason())
+                .createdByName(row.createdByName())
+                .createdAt(row.createdAt())
+                .build();
+    }
+
+    private SalaryPaymentResponse toPaymentResponseFromRow(
+            SalaryPaymentRow row, List<SalaryAdjustmentResponse> adjustments) {
+        BigDecimal totalAdditions = adjustments.stream()
+                .filter(a -> ADJ_TYPE_ADDITION.equalsIgnoreCase(a.getType()))
+                .map(SalaryAdjustmentResponse::getAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalDeductionAdjustments = adjustments.stream()
+                .filter(a -> ADJ_TYPE_DEDUCTION.equalsIgnoreCase(a.getType()))
+                .map(SalaryAdjustmentResponse::getAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return SalaryPaymentResponse.builder()
+                .id(row.id())
+                .userId(row.userId())
+                .fullName(row.fullName())
+                .empCode(row.empCode())
+                .month(row.month())
+                .year(row.year())
+                .salaryType(row.salaryType())
+                .workingDays(row.workingDays())
+                .presentDays(row.presentDays())
+                .absentDays(row.absentDays())
+                .halfDays(row.halfDays())
+                .paidLeaveDays(row.paidLeaveDays())
+                .unpaidLeaveDays(row.unpaidLeaveDays())
+                .overtimeHours(row.overtimeHours())
+                .overtimePay(row.overtimePay())
+                .basic(row.basic())
+                .hra(row.hra())
+                .allowances(row.allowances())
+                .grossSalary(row.grossSalary())
+                .pfDeduction(row.pfDeduction())
+                .otherDeductions(row.otherDeductions())
+                .advanceDeduction(row.advanceDeduction())
+                .totalAdjustmentAdditions(scale2(totalAdditions))
+                .totalAdjustmentDeductions(scale2(totalDeductionAdjustments))
+                .totalDeductions(row.totalDeductions())
+                .netSalary(row.netSalary())
+                .status(row.status())
+                .paidOn(row.paidOn())
+                .remarks(row.remarks())
+                .adjustments(adjustments)
+                .generatedByName(row.generatedByName())
+                .createdAt(row.createdAt())
                 .build();
     }
 

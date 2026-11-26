@@ -13,41 +13,34 @@ import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
 import com.hrapp.exception.UnauthorizedException;
+import com.hrapp.repository.AdvanceJdbcRepository;
 import com.hrapp.repository.AdvanceRepository;
+import com.hrapp.repository.AdvanceRow;
 import com.hrapp.repository.UserRepository;
 import com.hrapp.security.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 /**
  * Salary-advance workflow: employees request, ADMIN/HR approve or reject,
- * employees can cancel while still PENDING. Multi-tenancy is enforced at
- * every entry point via {@link SecurityUtil}.
- *
- * Reject/cancel store text in {@code reject_reason}; the requester's original
- * {@code reason} is preserved.
+ * employees can cancel while still PENDING. List reads use
+ * {@link AdvanceJdbcRepository}; writes stay on JPA.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AdvanceService {
 
+    private static final int MAX_PAGE_SIZE = 100;
     private static final String CANCEL_REASON = "Cancelled by employee";
 
     private final AdvanceRepository advanceRepository;
+    private final AdvanceJdbcRepository advanceJdbcRepository;
     private final UserRepository userRepository;
-
-    // ============================================================
-    //  Employee actions
-    // ============================================================
 
     @Transactional
     public AdvanceResponse requestAdvance(AdvanceRequest request) {
@@ -73,14 +66,14 @@ public class AdvanceService {
         advance = advanceRepository.save(advance);
         log.info("Advance requested id={} user={} amount={}",
                 advance.getId(), userId, request.getAmount());
-        return toResponse(advance);
+        return toAdvanceResponse(advance);
     }
 
     @Transactional(readOnly = true)
     public List<AdvanceResponse> getMyAdvances() {
         Long userId = requireCallerUserId();
-        return advanceRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(this::toResponse)
+        return advanceJdbcRepository.getAdvancesByUser(userId).stream()
+                .map(this::toAdvanceResponse)
                 .toList();
     }
 
@@ -102,42 +95,34 @@ public class AdvanceService {
         advance.setActionedAt(AppTime.now());
         advance = advanceRepository.save(advance);
         log.info("Advance id={} cancelled by user={}", id, userId);
-        return toResponse(advance);
+        return toAdvanceResponse(advance);
     }
 
-    // ============================================================
-    //  Admin / HR actions
-    // ============================================================
-
     @Transactional(readOnly = true)
-    public PageResponse<AdvanceResponse> getPendingAdvances(Pageable pageable) {
+    public PageResponse<AdvanceResponse> getPendingAdvances(int page, int size) {
+        validateAdvanceListPage(page, size);
         Long companyId = requireCallerCompanyId();
         Long callerId = requireCallerUserId();
-        // Newest first; exclude caller's own pending (self-action already blocked).
-        Pageable effective = applyDefaultSort(
-                pageable, Sort.by(Sort.Direction.DESC, "createdAt"));
-        return PageResponse.from(advanceRepository
-                .findByUser_CompanyIdAndStatusAndUser_IdNot(
-                        companyId, AdvanceStatus.PENDING, callerId, effective)
-                .map(this::toResponse));
+        long offset = (long) page * size;
+        List<AdvanceRow> rows = advanceJdbcRepository
+                .getPendingAdvancesByCompanyExcludingUser(companyId, callerId, size, offset);
+        long total = advanceJdbcRepository
+                .getPendingAdvancesByCompanyExcludingUserCount(companyId, callerId);
+        return PageResponse.of(rows.stream().map(this::toAdvanceResponse).toList(), page, size, total);
     }
 
     @Transactional(readOnly = true)
     public PageResponse<AdvanceResponse> getCompanyAdvances(
-            AdvanceStatus status, Long employeeId, Pageable pageable) {
+            AdvanceStatus status, Long employeeId, int page, int size) {
+        validateAdvanceListPage(page, size);
         Long companyId = requireCallerCompanyId();
-        Pageable effective = applyDefaultSort(
-                pageable, Sort.by(Sort.Direction.DESC, "createdAt"));
-        return PageResponse.from(advanceRepository
-                .findCompanyFiltered(companyId, status, employeeId, effective)
-                .map(this::toResponse));
-    }
-
-    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
-        if (pageable.getSort().isSorted()) {
-            return pageable;
-        }
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
+        String statusName = status != null ? status.name() : null;
+        long offset = (long) page * size;
+        List<AdvanceRow> rows = advanceJdbcRepository
+                .getCompanyAdvancesFiltered(companyId, statusName, employeeId, size, offset);
+        long total = advanceJdbcRepository
+                .getCompanyAdvancesFilteredCount(companyId, statusName, employeeId);
+        return PageResponse.of(rows.stream().map(this::toAdvanceResponse).toList(), page, size, total);
     }
 
     @Transactional
@@ -147,7 +132,7 @@ public class AdvanceService {
 
         Advance advance = advanceRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Advance not found"));
-        ensureSameCompany(advance.getUser(), companyId);
+        ensureEmployeeBelongsToCallerCompany(advance.getUser(), companyId);
 
         if (advance.getUser().getId().equals(actionerId)) {
             throw new BadRequestException(
@@ -186,12 +171,8 @@ public class AdvanceService {
         advance.setActionedAt(AppTime.now());
         advance = advanceRepository.save(advance);
         log.info("Advance id={} {} by user={}", id, request.getStatus(), actionerId);
-        return toResponse(advance);
+        return toAdvanceResponse(advance);
     }
-
-    // ============================================================
-    //  Helpers
-    // ============================================================
 
     private Long requireCallerUserId() {
         Long userId = SecurityUtil.getCurrentUserId();
@@ -209,7 +190,7 @@ public class AdvanceService {
         return companyId;
     }
 
-    private void ensureSameCompany(User user, Long callerCompanyId) {
+    private void ensureEmployeeBelongsToCallerCompany(User user, Long callerCompanyId) {
         Long userCompanyId = user.getCompany() != null ? user.getCompany().getId() : null;
         if (!callerCompanyId.equals(userCompanyId)) {
             log.warn("Cross-company advance access blocked — caller={} target={}",
@@ -218,7 +199,16 @@ public class AdvanceService {
         }
     }
 
-    private AdvanceResponse toResponse(Advance advance) {
+    private static void validateAdvanceListPage(int page, int size) {
+        if (page < 0) {
+            throw new BadRequestException("Page must be zero or greater");
+        }
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Size must be between 1 and " + MAX_PAGE_SIZE);
+        }
+    }
+
+    private AdvanceResponse toAdvanceResponse(Advance advance) {
         User user = advance.getUser();
         User approver = advance.getApprovedBy();
         return AdvanceResponse.builder()
@@ -236,6 +226,25 @@ public class AdvanceService {
                 .approvedByName(approver != null ? approver.getFullName() : null)
                 .createdAt(advance.getCreatedAt())
                 .actionedAt(advance.getActionedAt())
+                .build();
+    }
+
+    private AdvanceResponse toAdvanceResponse(AdvanceRow row) {
+        return AdvanceResponse.builder()
+                .id(row.id())
+                .userId(row.userId())
+                .fullName(row.fullName())
+                .empCode(row.empCode())
+                .amount(row.amount())
+                .reason(row.reason())
+                .rejectReason(row.rejectReason())
+                .status(row.status())
+                .deductFromMonth(row.deductFromMonth())
+                .deductFromYear(row.deductFromYear())
+                .isRecovered(row.isRecovered())
+                .approvedByName(row.approvedByName())
+                .createdAt(row.createdAt())
+                .actionedAt(row.actionedAt())
                 .build();
     }
 }

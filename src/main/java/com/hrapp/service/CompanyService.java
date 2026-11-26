@@ -25,7 +25,9 @@ import com.hrapp.enums.SalaryType;
 import com.hrapp.exception.BadRequestException;
 import com.hrapp.exception.ConflictException;
 import com.hrapp.exception.ResourceNotFoundException;
+import com.hrapp.repository.CompanyJdbcRepository;
 import com.hrapp.repository.CompanyRepository;
+import com.hrapp.repository.CompanyRow;
 import com.hrapp.repository.CompanySettingsRepository;
 import com.hrapp.repository.DepartmentRepository;
 import com.hrapp.repository.DesignationRepository;
@@ -40,9 +42,6 @@ import com.hrapp.security.TokenRevocationService;
 import com.hrapp.util.AppTime;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -69,6 +68,8 @@ import java.util.Map;
 @Slf4j
 public class CompanyService {
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     private static final String ROLE_ADMIN = "ADMIN";
     private static final String STATUS_ACTIVE = "Active";
     private static final String DEFAULT_HR_DEPARTMENT = "HR";
@@ -82,6 +83,7 @@ public class CompanyService {
             "HR Executive", "Accountant", "Operations Executive");
 
     private final CompanyRepository companyRepository;
+    private final CompanyJdbcRepository companyJdbcRepository;
     private final DepartmentRepository departmentRepository;
     private final DesignationRepository designationRepository;
     private final LeaveTypeRepository leaveTypeRepository;
@@ -166,17 +168,22 @@ public class CompanyService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public PageResponse<CompanyResponse> getAllCompanies(Pageable pageable) {
-        Pageable effective = applyDefaultSort(pageable, Sort.by(Sort.Direction.DESC, "createdAt"));
-        return PageResponse.from(companyRepository.findAll(effective)
-                .map(c -> toCompanyResponse(c, (int) userRepository.countByCompanyId(c.getId()))));
+    public PageResponse<CompanyResponse> getAllCompanies(int page, int size) {
+        validateCompanyListPage(page, size);
+        long offset = (long) page * size;
+        List<CompanyRow> rows = companyJdbcRepository.getAllCompanies(size, offset);
+        long total = companyJdbcRepository.getAllCompaniesCount();
+        List<CompanyResponse> content = rows.stream().map(this::toCompanyResponse).toList();
+        return PageResponse.of(content, page, size, total);
     }
 
-    private Pageable applyDefaultSort(Pageable pageable, Sort defaultSort) {
-        if (pageable.getSort().isSorted()) {
-            return pageable;
+    private static void validateCompanyListPage(int page, int size) {
+        if (page < 0) {
+            throw new BadRequestException("Page index must not be less than zero");
         }
-        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
+        if (size < 1 || size > MAX_PAGE_SIZE) {
+            throw new BadRequestException("Size must be between 1 and " + MAX_PAGE_SIZE);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -382,6 +389,18 @@ public class CompanyService {
                 .isActive(company.getIsActive())
                 .totalEmployees(totalEmployees)
                 .createdAt(company.getCreatedAt())
+                .build();
+    }
+
+    private CompanyResponse toCompanyResponse(CompanyRow row) {
+        return CompanyResponse.builder()
+                .id(row.id())
+                .name(row.name())
+                .address(row.address())
+                .logoUrl(row.logoUrl())
+                .isActive(row.isActive())
+                .totalEmployees(row.totalEmployees())
+                .createdAt(row.createdAt())
                 .build();
     }
 

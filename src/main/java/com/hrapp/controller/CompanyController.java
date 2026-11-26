@@ -11,8 +11,6 @@ import com.hrapp.service.CompanyService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -46,8 +44,7 @@ public class CompanyController {
     public ResponseEntity<ApiResponse<PageResponse<CompanyResponse>>> getAllCompanies(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        PageResponse<CompanyResponse> data = companyService.getAllCompanies(pageable);
+        PageResponse<CompanyResponse> data = companyService.getAllCompanies(page, size);
         return ResponseEntity.ok(ApiResponse.success(data, "Companies fetched successfully"));
     }
 
