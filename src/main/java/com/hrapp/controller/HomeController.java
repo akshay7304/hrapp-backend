@@ -12,13 +12,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Single home-screen API. Role is taken from the JWT; response includes
- * {@code me} for everyone with a company, and {@code ops} for ADMIN/HR.
+ * Single home-screen API. Role is taken from the JWT:
+ * EMPLOYEE → {@code me}; ADMIN/HR → {@code me}+{@code ops}; SUPERADMIN → {@code platform}.
  */
 @RestController
 @RequestMapping("/home")
 @RequiredArgsConstructor
-@Tag(name = "15. Home")
+@Tag(name = "15. Home", description = "Role-based home. SUPERADMIN gets data.platform (not me/ops).")
 public class HomeController {
 
     private final HomeService homeService;

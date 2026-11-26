@@ -80,23 +80,21 @@ public class HomeService {
     @Transactional(readOnly = true)
     public HomeResponse getHome() {
         String role = resolvePrimaryRole();
-        Long companyId = SecurityUtil.getCurrentUserCompanyId();
 
-        if (ROLE_SUPERADMIN.equals(role) && companyId == null) {
-            HomePlatformResponse platform = superAdminService.getPlatformHome();
+        // Platform owner has no tenant home — always return cross-tenant KPIs.
+        if (ROLE_SUPERADMIN.equals(role) || SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
             return HomeResponse.builder()
-                    .role(role)
+                    .role(ROLE_SUPERADMIN)
                     .me(null)
                     .ops(null)
-                    .platform(platform)
+                    .platform(superAdminService.getPlatformHome())
                     .build();
         }
 
         Long effectiveCompanyId = requireCallerCompanyId();
         HomeMeResponse me = buildMe(effectiveCompanyId);
         HomeOpsResponse ops = null;
-        if (SecurityUtil.hasRole(ROLE_ADMIN) || SecurityUtil.hasRole(ROLE_HR)
-                || SecurityUtil.hasRole(ROLE_SUPERADMIN)) {
+        if (SecurityUtil.hasRole(ROLE_ADMIN) || SecurityUtil.hasRole(ROLE_HR)) {
             ops = buildOps(effectiveCompanyId);
         }
 

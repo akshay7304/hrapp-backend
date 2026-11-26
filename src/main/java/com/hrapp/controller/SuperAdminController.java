@@ -8,6 +8,7 @@ import com.hrapp.dto.response.CompanyDetailResponse;
 import com.hrapp.dto.response.CompanyResponse;
 import com.hrapp.dto.response.PageResponse;
 import com.hrapp.service.SuperAdminService;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -31,12 +32,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/superadmin")
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('SUPERADMIN')")
-@Tag(name = "01. SuperAdmin")
+@Tag(name = "01. SuperAdmin", description = "Platform owner: onboard companies, list/update tenants. Home KPIs are on GET /home → data.platform")
 public class SuperAdminController {
 
     private final SuperAdminService superAdminService;
 
     @PostMapping("/companies")
+    @Operation(summary = "Onboard company", description = "Creates company, seeds defaults, admin user, and thumb webhook package.")
     public ResponseEntity<ApiResponse<CompanyDetailResponse>> createCompany(
             @Valid @RequestBody CreateCompanyRequest request) {
         CompanyDetailResponse data = superAdminService.createCompany(request);
@@ -45,6 +47,7 @@ public class SuperAdminController {
     }
 
     @GetMapping("/companies")
+    @Operation(summary = "List companies")
     public ResponseEntity<ApiResponse<PageResponse<CompanyResponse>>> getAllCompanies(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
@@ -53,6 +56,7 @@ public class SuperAdminController {
     }
 
     @GetMapping("/companies/{id}")
+    @Operation(summary = "Get company detail")
     public ResponseEntity<ApiResponse<CompanyDetailResponse>> getCompanyById(
             @PathVariable("id") Long id) {
         CompanyDetailResponse data = superAdminService.getCompanyById(id);
@@ -60,6 +64,7 @@ public class SuperAdminController {
     }
 
     @PutMapping("/companies/{id}")
+    @Operation(summary = "Update company")
     public ResponseEntity<ApiResponse<CompanyResponse>> updateCompany(
             @PathVariable("id") Long id,
             @Valid @RequestBody UpdateCompanyRequest request) {
@@ -68,6 +73,7 @@ public class SuperAdminController {
     }
 
     @PutMapping("/companies/{id}/status")
+    @Operation(summary = "Activate / deactivate company")
     public ResponseEntity<ApiResponse<CompanyResponse>> updateCompanyStatus(
             @PathVariable("id") Long id,
             @Valid @RequestBody UpdateCompanyStatusRequest request) {
