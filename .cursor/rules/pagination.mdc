@@ -1,0 +1,51 @@
+---
+description: Paginated lists use JdbcAccess (jdbcTemplate) + SQL LIMIT/OFFSET + COUNT — hh-api style.
+globs: src/main/java/com/hrapp/**/*.java
+alwaysApply: true
+---
+
+# Pagination — JdbcAccess (hh-api style)
+
+For **paginated / multi-join list APIs**, use `com.hrapp.jdbc.JdbcAccess` (same role as hh-api `JdbcAccess`): SQL in the repository, filters + sort + page in the DB.
+
+## Request / response
+- Params: `page` (0-based), `size`. Offset = `page * size`.
+- Response: `PageResponse` inside `ApiResponse` (`content`, `totalElements`, …).
+- Always: list query + matching `COUNT(*)` (same WHERE, no ORDER/LIMIT on count).
+
+## Pattern
+```java
+MapSqlParameterSource params = new MapSqlParameterSource()
+        .addValue("companyId", companyId)
+        .addValue("size", size)
+        .addValue("offset", page * size);
+
+List<MyRow> rows = jdbcAccess.findUsingNamedParameters(LIST_SQL, params, rowMapper);
+long total = jdbcAccess.findLongNamed(COUNT_SQL, params);
+
+return PageResponse.<MyDto>builder()
+        .content(rows.stream().map(this::toDto).toList())
+        .pageNumber(page)
+        .pageSize(size)
+        .totalElements(total)
+        // totalPages / hasNext / …
+        .build();
+```
+
+SQL shape (Postgres):
+```sql
+-- list
+... WHERE ... ORDER BY ... LIMIT :size OFFSET :offset
+-- count
+SELECT COUNT(*) ... WHERE ...   -- same filters
+```
+
+## Rules
+- Prefer `findUsingNamedParameters` / `findLongNamed` over positional `?` when filters grow.
+- `IN (:ids)` via named params — never string-join IDs into SQL.
+- No in-memory `subList` / sort for API pages.
+- No N+1 inside `RowMapper`.
+- Log slow queries via `JdbcAccess` (≥1s) — do not reimplement StopWatch in every repo.
+
+## When JPA Page is OK
+Simple single-table CRUD lists only. Dashboards / joins / heavy filters → **JdbcAccess**.
