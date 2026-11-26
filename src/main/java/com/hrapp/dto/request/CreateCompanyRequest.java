@@ -30,4 +30,10 @@ public class CreateCompanyRequest {
 
     @Email(message = "Admin email must be a valid email address")
     private String adminEmail;
+
+    /** Biometric device brand for webhook routing; defaults to ZKTECO when blank. */
+    private String deviceBrand;
+
+    /** Physical device serial / SN required for thumb push routing. */
+    private String deviceSerial;
 }

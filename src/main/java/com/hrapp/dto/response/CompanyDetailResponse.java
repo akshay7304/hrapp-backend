@@ -43,4 +43,10 @@ public class CompanyDetailResponse {
      * {@code POST /companies}. Never returned on subsequent GETs.
      */
     private String adminTemporaryPassword;
+
+    /**
+     * One-time thumb webhook wiring package — only set on company create.
+     * Plaintext device secret is never returned on subsequent GETs.
+     */
+    private ThumbWebhookSetupResponse thumbWebhook;
 }

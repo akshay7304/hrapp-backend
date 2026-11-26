@@ -7,8 +7,12 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Single home-screen payload. {@code me} is always filled for company users;
- * {@code ops} is filled only for ADMIN/HR.
+ * Single home-screen payload.
+ * <ul>
+ *   <li>EMPLOYEE — {@code me}</li>
+ *   <li>ADMIN/HR — {@code me} + {@code ops}</li>
+ *   <li>SUPERADMIN (no company) — {@code platform} only</li>
+ * </ul>
  */
 @Getter
 @Setter
@@ -21,4 +25,5 @@ public class HomeResponse {
     private String role;
     private HomeMeResponse me;
     private HomeOpsResponse ops;
+    private HomePlatformResponse platform;
 }

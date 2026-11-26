@@ -10,6 +10,7 @@ import com.hrapp.dto.response.DesignationResponse;
 import com.hrapp.dto.response.HolidayResponse;
 import com.hrapp.dto.response.LeaveTypeResponse;
 import com.hrapp.dto.response.PageResponse;
+import com.hrapp.dto.response.ThumbWebhookSetupResponse;
 import com.hrapp.entity.Company;
 import com.hrapp.entity.CompanySettings;
 import com.hrapp.entity.Department;
@@ -110,6 +111,16 @@ public class CompanyService {
                     Map.of("adminMobile", "Mobile number is already registered"));
         }
 
+        String deviceBrand = resolveDeviceBrand(request.getDeviceBrand());
+        String deviceSerial = blankToNull(request.getDeviceSerial());
+        if (deviceSerial != null) {
+            companySettingsRepository.findByDeviceSerial(deviceSerial).ifPresent(other -> {
+                throw new ConflictException(
+                        "Device serial already registered to another company",
+                        Map.of("deviceSerial", "Already in use"));
+            });
+        }
+
         Company company = companyRepository.save(Company.builder()
                 .name(request.getName())
                 .address(request.getAddress())
@@ -117,7 +128,7 @@ public class CompanyService {
                 .build());
         log.info("Created company id={} name='{}'", company.getId(), company.getName());
 
-        SeededDefaults seeded = seedDefaultData(company);
+        SeededDefaults seeded = seedDefaultData(company, deviceBrand, deviceSerial);
 
         Department hrDepartment = seeded.departmentsByName.get(DEFAULT_HR_DEPARTMENT);
         Designation managerDesignation = seeded.designationsByName.get(DEFAULT_MANAGER_DESIGNATION);
@@ -160,7 +171,7 @@ public class CompanyService {
 
         log.info("Created admin user id={} for company id={}", admin.getId(), company.getId());
 
-        return toDetailResponse(company, seeded, admin, 1, adminTemporaryPassword);
+        return toDetailResponse(company, seeded, admin, 1, adminTemporaryPassword, true);
     }
 
     // ============================================================
@@ -201,7 +212,7 @@ public class CompanyService {
                 .findFirst()
                 .orElse(null);
         int totalEmployees = (int) userRepository.countByCompanyId(id);
-        return toDetailResponse(company, seeded, admin, totalEmployees, null);
+        return toDetailResponse(company, seeded, admin, totalEmployees, null, false);
     }
 
     // ============================================================
@@ -240,13 +251,13 @@ public class CompanyService {
     //  Default-data seeding
     // ============================================================
 
-    private SeededDefaults seedDefaultData(Company company) {
+    private SeededDefaults seedDefaultData(Company company, String deviceBrand, String deviceSerial) {
         SeededDefaults seeded = new SeededDefaults();
         seeded.departments = seedDepartments(company);
         seeded.designations = seedDesignations(company);
         seeded.leaveTypes = seedLeaveTypes(company);
         seeded.holidays = seedHolidays(company);
-        seedCompanySettings(company);
+        seeded.companySettings = seedCompanySettings(company, deviceBrand, deviceSerial);
         seedDefaultShift(company);
 
         seeded.departments.forEach(d -> seeded.departmentsByName.put(d.getName(), d));
@@ -360,8 +371,8 @@ public class CompanyService {
         return created;
     }
 
-    private void seedCompanySettings(Company company) {
-        companySettingsRepository.save(CompanySettings.builder()
+    private CompanySettings seedCompanySettings(Company company, String deviceBrand, String deviceSerial) {
+        return companySettingsRepository.save(CompanySettings.builder()
                 .company(company)
                 .shiftStartTime(LocalTime.of(9, 0))
                 .shiftEndTime(LocalTime.of(18, 0))
@@ -371,7 +382,8 @@ public class CompanyService {
                 .lateMarkAfterMinutes(15)
                 .weekOffDay("SUNDAY")
                 .leaveCountType("EXCLUDE_WEEK_OFF_AND_HOLIDAYS")
-                .deviceBrand("ZKTECO")
+                .deviceBrand(deviceBrand)
+                .deviceSerial(deviceSerial)
                 .deviceSecret(CompanySettingsService.generateDeviceSecret())
                 .build());
     }
@@ -406,7 +418,20 @@ public class CompanyService {
 
     private CompanyDetailResponse toDetailResponse(Company company, SeededDefaults seeded,
                                                    User admin, int totalEmployees,
-                                                   String adminTemporaryPassword) {
+                                                   String adminTemporaryPassword,
+                                                   boolean includeThumbWebhookSecret) {
+        ThumbWebhookSetupResponse thumbWebhook = null;
+        if (includeThumbWebhookSecret && seeded.companySettings != null) {
+            CompanySettings settings = seeded.companySettings;
+            thumbWebhook = ThumbWebhookSetupResponse.builder()
+                    .deviceBrand(settings.getDeviceBrand())
+                    .deviceSerial(settings.getDeviceSerial())
+                    .deviceSecret(settings.getDeviceSecret())
+                    .zktecoWebhookPath("/thumb/zkteco")
+                    .esslWebhookPath("/thumb/essl")
+                    .genericWebhookPath("/thumb/generic")
+                    .build();
+        }
         return CompanyDetailResponse.builder()
                 .id(company.getId())
                 .name(company.getName())
@@ -422,7 +447,22 @@ public class CompanyService {
                 .adminName(admin != null ? admin.getFullName() : null)
                 .adminMobile(admin != null ? admin.getMobile() : null)
                 .adminTemporaryPassword(adminTemporaryPassword)
+                .thumbWebhook(thumbWebhook)
                 .build();
+    }
+
+    private static String resolveDeviceBrand(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "ZKTECO";
+        }
+        return raw.trim();
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private DepartmentResponse toDepartmentResponse(Department department) {
@@ -480,6 +520,7 @@ public class CompanyService {
         List<Designation> designations = List.of();
         List<LeaveType> leaveTypes = List.of();
         List<Holiday> holidays = List.of();
+        CompanySettings companySettings;
         final Map<String, Department> departmentsByName = new LinkedHashMap<>();
         final Map<String, Designation> designationsByName = new LinkedHashMap<>();
     }

@@ -13,6 +13,7 @@ import com.hrapp.dto.response.HomeOpsHeadcountResponse;
 import com.hrapp.dto.response.HomeOpsPayrollStatusResponse;
 import com.hrapp.dto.response.HomeOpsResponse;
 import com.hrapp.dto.response.HomeOpsTodayAttendanceSummaryResponse;
+import com.hrapp.dto.response.HomePlatformResponse;
 import com.hrapp.dto.response.HomeResponse;
 import com.hrapp.dto.response.LeaveBalanceResponse;
 import com.hrapp.entity.Company;
@@ -48,8 +49,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Single home-screen aggregate. Role comes from the JWT; EMPLOYEE gets {@code me}
- * only, ADMIN/HR also get {@code ops}.
+ * Single home-screen aggregate. Role comes from the JWT; EMPLOYEE gets {@code me},
+ * ADMIN/HR get {@code me}+{@code ops}, SUPERADMIN (no company) gets {@code platform}.
  */
 @Service
 @RequiredArgsConstructor
@@ -74,6 +75,7 @@ public class HomeService {
     private final ThumbLogRepository thumbLogRepository;
     private final SalaryPaymentRepository salaryPaymentRepository;
     private final ShiftAssignmentService shiftAssignmentService;
+    private final SuperAdminService superAdminService;
 
     @Transactional(readOnly = true)
     public HomeResponse getHome() {
@@ -81,10 +83,12 @@ public class HomeService {
         Long companyId = SecurityUtil.getCurrentUserCompanyId();
 
         if (ROLE_SUPERADMIN.equals(role) && companyId == null) {
+            HomePlatformResponse platform = superAdminService.getPlatformHome();
             return HomeResponse.builder()
                     .role(role)
                     .me(null)
                     .ops(null)
+                    .platform(platform)
                     .build();
         }
 
@@ -100,6 +104,7 @@ public class HomeService {
                 .role(role)
                 .me(me)
                 .ops(ops)
+                .platform(null)
                 .build();
     }
 
