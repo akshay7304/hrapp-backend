@@ -45,7 +45,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -119,9 +118,6 @@ public class ShiftRotationService {
     @Transactional
     public RotationResponse update(Long companyId, Long rotationId, UpdateRotationRequest request) {
         ShiftRotation rotation = requireRotation(companyId, rotationId);
-        if (!Boolean.TRUE.equals(rotation.getIsActive())) {
-            throw new BadRequestException("Cannot update a deactivated rotation");
-        }
 
         Long cid = rotation.getCompany().getId();
         String name = normalizeName(request.getName());
@@ -144,13 +140,19 @@ public class ShiftRotationService {
         return toRotationResponse(rotation);
     }
 
+    /**
+     * Hard-deletes the rotation. DB cascades steps, members, drafts and draft rows.
+     * Applied shift assignments are left untouched.
+     */
     @Transactional
-    public RotationResponse deactivate(Long companyId, Long rotationId) {
+    public void delete(Long companyId, Long rotationId) {
         ShiftRotation rotation = requireRotation(companyId, rotationId);
-        rotation.setIsActive(false);
-        rotationRepository.save(rotation);
-        log.info("Deactivated rotation id={}", rotationId);
-        return toRotationResponse(rotation);
+        // Clear open draft rows first so the partial unique index on DRAFT status
+        // cannot collide with in-flight persistence state.
+        deleteOpenDraftIfPresent(rotationId);
+        rotationRepository.delete(rotation);
+        rotationRepository.flush();
+        log.info("Deleted rotation id={} company={}", rotationId, companyId);
     }
 
     // ── Members ────────────────────────────────────────────────
@@ -158,23 +160,34 @@ public class ShiftRotationService {
     @Transactional
     public List<RotationMemberResponse> addMembers(Long companyId, Long rotationId,
                                                    RotationMembersRequest request) {
-        ShiftRotation rotation = requireActiveRotation(companyId, rotationId);
+        ShiftRotation rotation = requireRotation(companyId, rotationId);
         Long cid = rotation.getCompany().getId();
 
         for (Long userId : distinctIds(request.getUserIds())) {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new ResourceNotFoundException("Employee not found: " + userId));
             if (user.getCompany() == null || !cid.equals(user.getCompany().getId())) {
-                throw new BadRequestException("Employee " + userId + " does not belong to this company");
+                throw new BadRequestException(
+                        formatEmployeeLabel(user) + " does not belong to this company");
             }
 
-            var existing = memberRepository.findByUserId(userId);
-            if (existing.isPresent()) {
-                if (!existing.get().getRotation().getId().equals(rotationId)) {
-                    throw new ConflictException(
-                            "Employee " + userId + " is already on another rotation");
+            var existingOpt = memberRepository.findByUserId(userId);
+            if (existingOpt.isPresent()) {
+                ShiftRotationMember existing = existingOpt.get();
+                ShiftRotation other = existing.getRotation();
+                if (other.getId().equals(rotationId)) {
+                    continue;
                 }
-                continue;
+                // Soft-deactivated leftover: free the seat so they can join a live rotation.
+                if (!Boolean.TRUE.equals(other.getIsActive())) {
+                    memberRepository.deleteMemberById(existing.getId());
+                } else {
+                    throw new ConflictException(
+                            formatEmployeeLabel(user)
+                                    + " is already on rotation '"
+                                    + other.getName()
+                                    + "'");
+                }
             }
 
             memberRepository.save(ShiftRotationMember.builder()
@@ -188,7 +201,7 @@ public class ShiftRotationService {
 
     @Transactional
     public void removeMember(Long companyId, Long rotationId, Long userId) {
-        requireActiveRotation(companyId, rotationId);
+        requireRotation(companyId, rotationId);
         if (memberRepository.findByRotationIdAndUserId(rotationId, userId).isEmpty()) {
             throw new ResourceNotFoundException("Member not found on this rotation");
         }
@@ -209,8 +222,16 @@ public class ShiftRotationService {
     @Transactional
     public RotationDraftResponse generateDraft(Long companyId, Long rotationId,
                                                GenerateRotationDraftRequest request) {
-        ShiftRotation rotation = requireActiveRotation(companyId, rotationId);
+        ShiftRotation rotation = requireRotation(companyId, rotationId);
         Long cid = rotation.getCompany().getId();
+
+        LocalDate periodStart = resolvePeriodStart(rotation, request != null ? request.getPeriodStart() : null);
+        LocalDate periodEnd = resolvePeriodEnd(rotation, periodStart);
+
+        // Replace any open DRAFT first (bulk delete clears the persistence context).
+        // Load steps/members AFTER so lazy User/Shift proxies stay usable.
+        deleteOpenDraftIfPresent(rotationId);
+
         List<ShiftRotationStep> steps = stepRepository.findByRotationIdOrderByStepOrderAsc(rotationId);
         if (steps.size() < 2) {
             throw new BadRequestException("Rotation needs at least 2 shifts in the cycle");
@@ -220,16 +241,6 @@ public class ShiftRotationService {
         if (members.isEmpty()) {
             throw new BadRequestException("Add members before generating a draft");
         }
-
-        LocalDate periodStart = resolvePeriodStart(rotation, request != null ? request.getPeriodStart() : null);
-        LocalDate periodEnd = resolvePeriodEnd(rotation, periodStart);
-
-        draftRepository.findByRotationIdAndStatus(rotationId, RotationDraftStatus.DRAFT)
-                .ifPresent(existing -> {
-                    draftRowRepository.deleteByDraftId(existing.getId());
-                    draftRepository.delete(existing);
-                    draftRepository.flush();
-                });
 
         ShiftRotationDraft draft = draftRepository.save(ShiftRotationDraft.builder()
                 .rotation(rotation)
@@ -263,6 +274,16 @@ public class ShiftRotationService {
         return toDraftResponse(draft);
     }
 
+    @Transactional
+    public void deleteCurrentDraft(Long companyId, Long rotationId) {
+        requireRotation(companyId, rotationId);
+        ShiftRotationDraft open = draftRepository
+                .findByRotationIdAndStatus(rotationId, RotationDraftStatus.DRAFT)
+                .orElseThrow(() -> new ResourceNotFoundException("No open draft for this rotation"));
+        deleteDraftFully(open.getId());
+        log.info("Deleted open draft id={} for rotation={}", open.getId(), rotationId);
+    }
+
     @Transactional(readOnly = true)
     public RotationDraftResponse getCurrentDraft(Long companyId, Long rotationId) {
         requireRotation(companyId, rotationId);
@@ -275,7 +296,7 @@ public class ShiftRotationService {
     @Transactional
     public RotationDraftResponse updateDraftRow(Long companyId, Long rotationId, Long userId,
                                                 UpdateDraftRowRequest request) {
-        ShiftRotation rotation = requireActiveRotation(companyId, rotationId);
+        ShiftRotation rotation = requireRotation(companyId, rotationId);
         ShiftRotationDraft draft = draftRepository
                 .findByRotationIdAndStatus(rotationId, RotationDraftStatus.DRAFT)
                 .orElseThrow(() -> new ResourceNotFoundException("No open draft for this rotation"));
@@ -300,7 +321,7 @@ public class ShiftRotationService {
     @Transactional
     public RotationDraftResponse confirmDraft(Long companyId, Long rotationId,
                                               ConfirmRotationDraftRequest request) {
-        requireActiveRotation(companyId, rotationId);
+        requireRotation(companyId, rotationId);
         ShiftRotationDraft draft = draftRepository
                 .findByRotationIdAndStatus(rotationId, RotationDraftStatus.DRAFT)
                 .orElseThrow(() -> new ResourceNotFoundException("No open draft for this rotation"));
@@ -426,12 +447,25 @@ public class ShiftRotationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Rotation not found"));
     }
 
-    private ShiftRotation requireActiveRotation(Long companyId, Long rotationId) {
-        ShiftRotation rotation = requireRotation(companyId, rotationId);
-        if (!Boolean.TRUE.equals(rotation.getIsActive())) {
-            throw new BadRequestException("Rotation is deactivated");
+    private void deleteOpenDraftIfPresent(Long rotationId) {
+        draftRepository.findByRotationIdAndStatus(rotationId, RotationDraftStatus.DRAFT)
+                .ifPresent(existing -> deleteDraftFully(existing.getId()));
+    }
+
+    private void deleteDraftFully(Long draftId) {
+        draftRowRepository.deleteByDraftId(draftId);
+        draftRepository.deleteDraftById(draftId);
+    }
+
+    private String formatEmployeeLabel(User user) {
+        String name = user.getFullName() != null && !user.getFullName().isBlank()
+                ? user.getFullName().trim()
+                : "Employee";
+        String code = user.getEmpCode();
+        if (code != null && !code.isBlank()) {
+            return name + " (" + code.trim() + ")";
         }
-        return rotation;
+        return name;
     }
 
     private String normalizeName(String name) {

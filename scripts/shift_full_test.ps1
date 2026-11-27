@@ -306,6 +306,30 @@ Call-Api -Name "P4 getCurrentDraft" -Method GET `
   if ($d.data.status -ne "DRAFT") { throw "status" }
 }
 
+# Regenerate must replace the open draft (no unique-index 500).
+Call-Api -Name "P4 regenerateDraft" -Method POST `
+  -Url "$base/shifts/company/$companyId/rotations/$rotationId/drafts/generate" `
+  -Headers (AuthHdr $adminTok) -Body $genBody -ExpectStatus @(201) -Assert {
+  param($d,$s)
+  if ($d.data.status -ne "DRAFT") { throw "not draft" }
+  if ($d.data.rows.Count -lt 2) { throw "rows" }
+}
+
+Call-Api -Name "P4 deleteCurrentDraft" -Method DELETE `
+  -Url "$base/shifts/company/$companyId/rotations/$rotationId/drafts/current" `
+  -Headers (AuthHdr $adminTok) -Assert { param($d,$s) if (-not $d.success) { throw "fail" } }
+
+Call-Api -Name "P4 no draft after delete" -Method GET `
+  -Url "$base/shifts/company/$companyId/rotations/$rotationId/drafts/current" `
+  -Headers (AuthHdr $adminTok) -ExpectStatus @(404)
+
+$draft = Call-Api -Name "P4 generateDraft again" -Method POST `
+  -Url "$base/shifts/company/$companyId/rotations/$rotationId/drafts/generate" `
+  -Headers (AuthHdr $adminTok) -Body $genBody -ExpectStatus @(201) -Assert {
+  param($d,$s)
+  if ($d.data.status -ne "DRAFT") { throw "not draft" }
+}
+
 $row7 = $draft.data.rows | Where-Object { $_.userId -eq $emp7 } | Select-Object -First 1
 if ($row7.currentShiftName -eq "Morning" -and $row7.proposedShiftName -eq "Night") {
   Write-Host "[PASS] P4 cycle Morning->Night (manual assert)"
@@ -348,16 +372,13 @@ Call-Api -Name "P4 removeMember" -Method DELETE `
   -Url "$base/shifts/company/$companyId/rotations/$rotationId/members/$emp8" `
   -Headers (AuthHdr $adminTok) -Assert { param($d,$s) if (-not $d.success) { throw "fail" } }
 
-Call-Api -Name "P4 deactivateRotation" -Method DELETE `
+Call-Api -Name "P4 deleteRotation" -Method DELETE `
   -Url "$base/shifts/company/$companyId/rotations/$rotationId" `
-  -Headers (AuthHdr $adminTok) -Assert {
-  param($d,$s)
-  if ($d.data.isActive -ne $false) { throw "still active" }
-}
+  -Headers (AuthHdr $adminTok) -Assert { param($d,$s) if (-not $d.success) { throw "fail" } }
 
-Call-Api -Name "P4 generate on inactive forbidden" -Method POST `
+Call-Api -Name "P4 generate on deleted forbidden" -Method POST `
   -Url "$base/shifts/company/$companyId/rotations/$rotationId/drafts/generate" `
-  -Headers (AuthHdr $adminTok) -Body "{}" -ExpectStatus @(400)
+  -Headers (AuthHdr $adminTok) -Body "{}" -ExpectStatus @(404)
 
 # ── Phase 5 home + attendance linkage ──────────────────────────
 $homeResp = Call-Api -Name "P5 home shift" -Method GET -Url "$base/home" `

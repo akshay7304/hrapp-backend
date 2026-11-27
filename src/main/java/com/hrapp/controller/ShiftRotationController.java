@@ -80,12 +80,11 @@ public class ShiftRotationController {
 
     @DeleteMapping("/{rotationId}")
     @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN','HR')")
-    public ResponseEntity<ApiResponse<RotationResponse>> deactivate(
+    public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable Long companyId,
             @PathVariable Long rotationId) {
-        return ResponseEntity.ok(ApiResponse.success(
-                shiftRotationService.deactivate(companyId, rotationId),
-                "Rotation deactivated successfully"));
+        shiftRotationService.delete(companyId, rotationId);
+        return ResponseEntity.ok(ApiResponse.success(null, "Rotation deleted successfully"));
     }
 
     @PostMapping("/{rotationId}/members")
@@ -139,6 +138,15 @@ public class ShiftRotationController {
         return ResponseEntity.ok(ApiResponse.success(
                 shiftRotationService.getCurrentDraft(companyId, rotationId),
                 "Draft retrieved successfully"));
+    }
+
+    @DeleteMapping("/{rotationId}/drafts/current")
+    @PreAuthorize("hasAnyRole('SUPERADMIN','ADMIN','HR')")
+    public ResponseEntity<ApiResponse<Void>> deleteCurrentDraft(
+            @PathVariable Long companyId,
+            @PathVariable Long rotationId) {
+        shiftRotationService.deleteCurrentDraft(companyId, rotationId);
+        return ResponseEntity.ok(ApiResponse.success(null, "Draft deleted successfully"));
     }
 
     @PutMapping("/{rotationId}/drafts/current/rows/{userId}")
