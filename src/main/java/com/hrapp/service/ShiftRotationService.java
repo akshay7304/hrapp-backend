@@ -327,17 +327,29 @@ public class ShiftRotationService {
                 .orElseThrow(() -> new ResourceNotFoundException("No open draft for this rotation"));
 
         LocalDate effectiveFrom = request.getEffectiveFrom();
+        LocalDate periodEnd = draft.getPeriodEnd();
+        if (periodEnd != null && periodEnd.isBefore(effectiveFrom)) {
+            throw new BadRequestException(
+                    "effectiveFrom cannot be after the draft period end (" + periodEnd + ")");
+        }
+
         List<ShiftRotationDraftRow> rows = draftRowRepository.findByDraftIdOrderByUser_FullNameAsc(draft.getId());
         if (rows.isEmpty()) {
             throw new BadRequestException("Draft has no rows to confirm");
         }
+
+        // Cover = [effectiveFrom, periodEnd]: clear only overlapping later assigns
+        // inside the window (e.g. Morning from 30 Nov). Rows after periodEnd stay
+        // (e.g. Morning from 15 Dec). Assignment itself stays open-ended so Night
+        // continues after periodEnd until a later assign wins.
+        LocalDate clearThrough = periodEnd != null ? periodEnd : effectiveFrom;
 
         for (ShiftRotationDraftRow row : rows) {
             shiftAssignmentService.assignShift(companyId, AssignShiftRequest.builder()
                     .userId(row.getUser().getId())
                     .shiftId(row.getProposedShift().getId())
                     .effectiveFrom(effectiveFrom)
-                    .build());
+                    .build(), clearThrough);
         }
 
         Long actorId = SecurityUtil.getCurrentUserId();

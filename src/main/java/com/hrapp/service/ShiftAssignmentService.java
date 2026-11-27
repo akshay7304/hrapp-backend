@@ -46,8 +46,24 @@ public class ShiftAssignmentService {
     private final UserRepository userRepository;
     private final CompanyRepository companyRepository;
 
+    /**
+     * Manual / open-ended assign: this decision wins from {@code effectiveFrom}
+     * onward and clears every later assignment row for that employee.
+     */
     @Transactional
     public ShiftAssignmentResponse assignShift(Long companyId, AssignShiftRequest request) {
+        return assignShift(companyId, request, null);
+    }
+
+    /**
+     * @param clearThroughInclusive when non-null (rotation confirm), only clears
+     *        later assignments with {@code effectiveFrom} in
+     *        ({@code effectiveFrom}, {@code clearThroughInclusive}]; rows after
+     *        that date are kept. When null, clears all later rows.
+     */
+    @Transactional
+    public ShiftAssignmentResponse assignShift(Long companyId, AssignShiftRequest request,
+                                               LocalDate clearThroughInclusive) {
         Long effectiveCompanyId = resolveCompanyId(companyId);
         Long actorId = SecurityUtil.getCurrentUserId();
 
@@ -62,6 +78,13 @@ public class ShiftAssignmentService {
         }
 
         LocalDate effectiveFrom = request.getEffectiveFrom();
+        if (clearThroughInclusive != null && clearThroughInclusive.isBefore(effectiveFrom)) {
+            throw new BadRequestException("clearThrough cannot be before effectiveFrom");
+        }
+
+        int cleared = clearConflictingAssignments(
+                user.getId(), effectiveFrom, clearThroughInclusive);
+
         ShiftAssignment assignment = shiftAssignmentRepository
                 .findByUser_IdAndEffectiveFrom(user.getId(), effectiveFrom)
                 .orElse(null);
@@ -88,9 +111,24 @@ public class ShiftAssignmentService {
         }
 
         assignment = shiftAssignmentRepository.save(assignment);
-        log.info("Assigned shift id={} to user={} effectiveFrom={} company={}",
-                shift.getId(), user.getId(), effectiveFrom, effectiveCompanyId);
+        log.info("Assigned shift id={} to user={} effectiveFrom={} cleared={} clearThrough={} company={}",
+                shift.getId(), user.getId(), effectiveFrom, cleared, clearThroughInclusive,
+                effectiveCompanyId);
         return toAssignmentResponse(assignment);
+    }
+
+    /**
+     * Drops later-dated assignment rows that would otherwise override this decision
+     * inside the cover window (or all futures when {@code clearThrough} is null).
+     */
+    private int clearConflictingAssignments(Long userId, LocalDate effectiveFrom,
+                                            LocalDate clearThroughInclusive) {
+        if (clearThroughInclusive == null) {
+            return shiftAssignmentRepository.deleteByUserIdAndEffectiveFromAfter(
+                    userId, effectiveFrom);
+        }
+        return shiftAssignmentRepository.deleteByUserIdAndEffectiveFromAfterAndThrough(
+                userId, effectiveFrom, clearThroughInclusive);
     }
 
     @Transactional(readOnly = true)
